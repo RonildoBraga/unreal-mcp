@@ -509,7 +509,7 @@ UK2Node_Event* FUnrealMCPCommonUtils::FindExistingEventNode(UEdGraph* Graph, con
     return nullptr;
 }
 
-bool FUnrealMCPCommonUtils::SetObjectProperty(UObject* Object, const FString& PropertyName, 
+bool FUnrealMCPCommonUtils::SetObjectProperty(UObject* Object, const FString& PropertyName,
                                      const TSharedPtr<FJsonValue>& Value, FString& OutErrorMessage)
 {
     if (!Object)
@@ -703,7 +703,491 @@ bool FUnrealMCPCommonUtils::SetObjectProperty(UObject* Object, const FString& Pr
         }
     }
     
-    OutErrorMessage = FString::Printf(TEXT("Unsupported property type: %s for property %s"), 
+    // v0.7.4: FStructProperty handling — vectors, colors, rotators
+    if (Property->IsA<FStructProperty>())
+    {
+        FStructProperty* StructProp = CastField<FStructProperty>(Property);
+        UScriptStruct* StructType = StructProp ? StructProp->Struct : nullptr;
+
+        if (!StructType)
+        {
+            OutErrorMessage = FString::Printf(TEXT("Struct property '%s' has no script struct"), *PropertyName);
+            return false;
+        }
+
+        const FName StructName = StructType->GetFName();
+
+        // Helper: parse a 3- or 4-vector from either a JSON array or object form.
+        // Returns true on success and fills X/Y/Z/W (W defaults to 1 for objects
+        // / arrays that don't supply it). The caller decides which channels to use.
+        auto ParseVec4 = [&](double& X, double& Y, double& Z, double& W) -> bool
+        {
+            X = Y = Z = 0.0;
+            W = 1.0;
+            if (Value->Type == EJson::Array)
+            {
+                const TArray<TSharedPtr<FJsonValue>>& Arr = Value->AsArray();
+                if (Arr.Num() >= 1) X = Arr[0]->AsNumber();
+                if (Arr.Num() >= 2) Y = Arr[1]->AsNumber();
+                if (Arr.Num() >= 3) Z = Arr[2]->AsNumber();
+                if (Arr.Num() >= 4) W = Arr[3]->AsNumber();
+                return true;
+            }
+            if (Value->Type == EJson::Object)
+            {
+                const TSharedPtr<FJsonObject>& Obj = Value->AsObject();
+                if (!Obj.IsValid()) return false;
+                // Accept x/y/z/w and X/Y/Z/W and r/g/b/a + Pitch/Yaw/Roll
+                auto Take = [&Obj](const TCHAR* A, const TCHAR* B, const TCHAR* C, double& Out)
+                {
+                    double V = 0;
+                    if (Obj->TryGetNumberField(A, V) || (B && Obj->TryGetNumberField(B, V)) || (C && Obj->TryGetNumberField(C, V)))
+                    {
+                        Out = V;
+                    }
+                };
+                Take(TEXT("x"), TEXT("X"), TEXT("r"), X);
+                Take(TEXT("y"), TEXT("Y"), TEXT("g"), Y);
+                Take(TEXT("z"), TEXT("Z"), TEXT("b"), Z);
+                Take(TEXT("w"), TEXT("W"), TEXT("a"), W);
+                // Rotator-specific aliases
+                double V = 0;
+                if (Obj->TryGetNumberField(TEXT("Pitch"), V) || Obj->TryGetNumberField(TEXT("pitch"), V)) X = V;
+                if (Obj->TryGetNumberField(TEXT("Yaw"),   V) || Obj->TryGetNumberField(TEXT("yaw"),   V)) Y = V;
+                if (Obj->TryGetNumberField(TEXT("Roll"),  V) || Obj->TryGetNumberField(TEXT("roll"),  V)) Z = V;
+                return true;
+            }
+            return false;
+        };
+
+        if (StructName == NAME_Vector || StructType == TBaseStructure<FVector>::Get())
+        {
+            double X, Y, Z, W;
+            if (!ParseVec4(X, Y, Z, W))
+            {
+                OutErrorMessage = TEXT("Vector property expects [x,y,z] array or {x,y,z} object");
+                return false;
+            }
+            FVector* Dest = static_cast<FVector*>(PropertyAddr);
+            *Dest = FVector(X, Y, Z);
+            return true;
+        }
+        if (StructName == NAME_Rotator || StructType == TBaseStructure<FRotator>::Get())
+        {
+            double Pitch, Yaw, Roll, W;
+            if (!ParseVec4(Pitch, Yaw, Roll, W))
+            {
+                OutErrorMessage = TEXT("Rotator property expects [pitch,yaw,roll] array or {pitch,yaw,roll} object");
+                return false;
+            }
+            FRotator* Dest = static_cast<FRotator*>(PropertyAddr);
+            *Dest = FRotator(Pitch, Yaw, Roll);
+            return true;
+        }
+        if (StructType == TBaseStructure<FLinearColor>::Get())
+        {
+            double R, G, B, A;
+            if (!ParseVec4(R, G, B, A))
+            {
+                OutErrorMessage = TEXT("LinearColor expects [r,g,b,a] array or {r,g,b,a} object (0..1 floats)");
+                return false;
+            }
+            FLinearColor* Dest = static_cast<FLinearColor*>(PropertyAddr);
+            *Dest = FLinearColor(R, G, B, A);
+            return true;
+        }
+        if (StructType == TBaseStructure<FColor>::Get())
+        {
+            double R, G, B, A;
+            if (!ParseVec4(R, G, B, A))
+            {
+                OutErrorMessage = TEXT("Color expects [r,g,b,a] array or {r,g,b,a} object (0..255 ints)");
+                return false;
+            }
+            FColor* Dest = static_cast<FColor*>(PropertyAddr);
+            *Dest = FColor(
+                FMath::Clamp<int32>(static_cast<int32>(R), 0, 255),
+                FMath::Clamp<int32>(static_cast<int32>(G), 0, 255),
+                FMath::Clamp<int32>(static_cast<int32>(B), 0, 255),
+                FMath::Clamp<int32>(static_cast<int32>(A), 0, 255));
+            return true;
+        }
+
+        OutErrorMessage = FString::Printf(
+            TEXT("Unsupported struct type '%s' for property '%s' (handles: Vector, Rotator, LinearColor, Color)"),
+            *StructName.ToString(), *PropertyName);
+        return false;
+    }
+
+    // v0.7.4: FObjectProperty handling — set asset/UObject references by path
+    // Useful for setting things like SkeletalMeshComponent.SkeletalMesh,
+    // PrimitiveComponent.Material via path strings rather than UObject pointers.
+    if (Property->IsA<FObjectProperty>())
+    {
+        FObjectProperty* ObjProp = CastField<FObjectProperty>(Property);
+        if (Value->Type != EJson::String)
+        {
+            OutErrorMessage = FString::Printf(
+                TEXT("Object property '%s' expects a /Game/-prefixed string path"), *PropertyName);
+            return false;
+        }
+        const FString AssetPath = Value->AsString();
+        if (AssetPath.IsEmpty())
+        {
+            // Explicit null assignment is legitimate (clearing a slot).
+            ObjProp->SetObjectPropertyValue_InContainer(Object, nullptr);
+            return true;
+        }
+        UObject* Loaded = LoadObject<UObject>(nullptr, *AssetPath);
+        if (!Loaded)
+        {
+            OutErrorMessage = FString::Printf(TEXT("Could not load asset at path: %s"), *AssetPath);
+            return false;
+        }
+        // Type-check: target slot must accept this UClass
+        UClass* ExpectedClass = ObjProp->PropertyClass;
+        if (ExpectedClass && !Loaded->IsA(ExpectedClass))
+        {
+            OutErrorMessage = FString::Printf(
+                TEXT("Loaded asset is a %s, but property '%s' expects %s"),
+                *Loaded->GetClass()->GetName(), *PropertyName, *ExpectedClass->GetName());
+            return false;
+        }
+        ObjProp->SetObjectPropertyValue_InContainer(Object, Loaded);
+        return true;
+    }
+
+    OutErrorMessage = FString::Printf(TEXT("Unsupported property type: %s for property %s"),
                                     *Property->GetClass()->GetName(), *PropertyName);
     return false;
-} 
+}
+
+
+// v0.7.5 — internal helper. Pure address-based value setter (no UObject
+// dependency in any branch). Used by SetPropertyAtTarget so that struct-owned
+// leaves work the same way as UObject-owned ones.
+static bool SetValueAtAddress(FProperty* Property, void* PropertyAddr,
+                              const TSharedPtr<FJsonValue>& Value, FString& OutErrorMessage)
+{
+    if (!Property || !PropertyAddr)
+    {
+        OutErrorMessage = TEXT("Null property or container in SetValueAtAddress");
+        return false;
+    }
+    const FString PropertyName = Property->GetName();
+
+    if (Property->IsA<FBoolProperty>())
+    {
+        static_cast<FBoolProperty*>(Property)->SetPropertyValue(PropertyAddr, Value->AsBool());
+        return true;
+    }
+    if (FIntProperty* IntProperty = CastField<FIntProperty>(Property))
+    {
+        IntProperty->SetPropertyValue(PropertyAddr, static_cast<int32>(Value->AsNumber()));
+        return true;
+    }
+    if (Property->IsA<FFloatProperty>())
+    {
+        static_cast<FFloatProperty*>(Property)->SetPropertyValue(PropertyAddr, Value->AsNumber());
+        return true;
+    }
+    if (Property->IsA<FDoubleProperty>())
+    {
+        static_cast<FDoubleProperty*>(Property)->SetPropertyValue(PropertyAddr, Value->AsNumber());
+        return true;
+    }
+    if (Property->IsA<FStrProperty>())
+    {
+        static_cast<FStrProperty*>(Property)->SetPropertyValue(PropertyAddr, Value->AsString());
+        return true;
+    }
+    if (Property->IsA<FNameProperty>())
+    {
+        static_cast<FNameProperty*>(Property)->SetPropertyValue(PropertyAddr, FName(*Value->AsString()));
+        return true;
+    }
+
+    // Struct properties — vectors, colors, rotators
+    if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
+    {
+        UScriptStruct* StructType = StructProp->Struct;
+        if (!StructType)
+        {
+            OutErrorMessage = FString::Printf(TEXT("Struct property '%s' has no script struct"), *PropertyName);
+            return false;
+        }
+
+        auto ParseVec4 = [&](double& X, double& Y, double& Z, double& W) -> bool
+        {
+            X = Y = Z = 0.0; W = 1.0;
+            if (Value->Type == EJson::Array)
+            {
+                const TArray<TSharedPtr<FJsonValue>>& Arr = Value->AsArray();
+                if (Arr.Num() >= 1) X = Arr[0]->AsNumber();
+                if (Arr.Num() >= 2) Y = Arr[1]->AsNumber();
+                if (Arr.Num() >= 3) Z = Arr[2]->AsNumber();
+                if (Arr.Num() >= 4) W = Arr[3]->AsNumber();
+                return true;
+            }
+            if (Value->Type == EJson::Object)
+            {
+                const TSharedPtr<FJsonObject>& Obj = Value->AsObject();
+                if (!Obj.IsValid()) return false;
+                auto Take = [&Obj](const TCHAR* A, const TCHAR* B, const TCHAR* C, double& Out) {
+                    double V = 0;
+                    if (Obj->TryGetNumberField(A, V) || (B && Obj->TryGetNumberField(B, V)) || (C && Obj->TryGetNumberField(C, V)))
+                        Out = V;
+                };
+                Take(TEXT("x"), TEXT("X"), TEXT("r"), X);
+                Take(TEXT("y"), TEXT("Y"), TEXT("g"), Y);
+                Take(TEXT("z"), TEXT("Z"), TEXT("b"), Z);
+                Take(TEXT("w"), TEXT("W"), TEXT("a"), W);
+                double V = 0;
+                if (Obj->TryGetNumberField(TEXT("Pitch"), V) || Obj->TryGetNumberField(TEXT("pitch"), V)) X = V;
+                if (Obj->TryGetNumberField(TEXT("Yaw"),   V) || Obj->TryGetNumberField(TEXT("yaw"),   V)) Y = V;
+                if (Obj->TryGetNumberField(TEXT("Roll"),  V) || Obj->TryGetNumberField(TEXT("roll"),  V)) Z = V;
+                return true;
+            }
+            return false;
+        };
+
+        if (StructType == TBaseStructure<FVector>::Get())
+        {
+            double X, Y, Z, W; if (!ParseVec4(X, Y, Z, W)) { OutErrorMessage = TEXT("Vector expects [x,y,z]"); return false; }
+            *static_cast<FVector*>(PropertyAddr) = FVector(X, Y, Z);
+            return true;
+        }
+        if (StructType == TBaseStructure<FRotator>::Get())
+        {
+            double P, Y, R, W; if (!ParseVec4(P, Y, R, W)) { OutErrorMessage = TEXT("Rotator expects [pitch,yaw,roll]"); return false; }
+            *static_cast<FRotator*>(PropertyAddr) = FRotator(P, Y, R);
+            return true;
+        }
+        if (StructType == TBaseStructure<FLinearColor>::Get())
+        {
+            double R, G, B, A; if (!ParseVec4(R, G, B, A)) { OutErrorMessage = TEXT("LinearColor expects [r,g,b,a] 0..1"); return false; }
+            *static_cast<FLinearColor*>(PropertyAddr) = FLinearColor(R, G, B, A);
+            return true;
+        }
+        if (StructType == TBaseStructure<FColor>::Get())
+        {
+            double R, G, B, A; if (!ParseVec4(R, G, B, A)) { OutErrorMessage = TEXT("Color expects [r,g,b,a] 0..255"); return false; }
+            *static_cast<FColor*>(PropertyAddr) = FColor(
+                FMath::Clamp<int32>((int32)R, 0, 255),
+                FMath::Clamp<int32>((int32)G, 0, 255),
+                FMath::Clamp<int32>((int32)B, 0, 255),
+                FMath::Clamp<int32>((int32)A, 0, 255));
+            return true;
+        }
+
+        OutErrorMessage = FString::Printf(TEXT("Unsupported struct '%s' (handles: Vector, Rotator, LinearColor, Color)"),
+                                          *StructType->GetName());
+        return false;
+    }
+
+    // Asset / UObject reference — load by path string
+    if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Property))
+    {
+        if (Value->Type != EJson::String)
+        {
+            OutErrorMessage = FString::Printf(TEXT("Object property '%s' expects a /Game/-prefixed string"), *PropertyName);
+            return false;
+        }
+        const FString AssetPath = Value->AsString();
+        if (AssetPath.IsEmpty())
+        {
+            ObjProp->SetObjectPropertyValue(PropertyAddr, nullptr);
+            return true;
+        }
+        UObject* Loaded = LoadObject<UObject>(nullptr, *AssetPath);
+        if (!Loaded)
+        {
+            OutErrorMessage = FString::Printf(TEXT("Could not load asset: %s"), *AssetPath);
+            return false;
+        }
+        if (ObjProp->PropertyClass && !Loaded->IsA(ObjProp->PropertyClass))
+        {
+            OutErrorMessage = FString::Printf(TEXT("Asset is %s, slot expects %s"),
+                                              *Loaded->GetClass()->GetName(), *ObjProp->PropertyClass->GetName());
+            return false;
+        }
+        ObjProp->SetObjectPropertyValue(PropertyAddr, Loaded);
+        return true;
+    }
+
+    // Byte property — handles regular bytes + TEnumAsByte
+    if (FByteProperty* ByteProp = CastField<FByteProperty>(Property))
+    {
+        if (Value->Type == EJson::Number)
+        {
+            ByteProp->SetPropertyValue(PropertyAddr, static_cast<uint8>(Value->AsNumber()));
+            return true;
+        }
+        if (UEnum* EnumDef = ByteProp->GetIntPropertyEnum())
+        {
+            FString S = Value->AsString();
+            if (S.Contains(TEXT("::"))) S.Split(TEXT("::"), nullptr, &S);
+            int64 EnumValue = EnumDef->GetValueByNameString(S);
+            if (EnumValue != INDEX_NONE)
+            {
+                ByteProp->SetPropertyValue(PropertyAddr, static_cast<uint8>(EnumValue));
+                return true;
+            }
+            OutErrorMessage = FString::Printf(TEXT("Enum value '%s' not found"), *S);
+            return false;
+        }
+    }
+    if (FEnumProperty* EnumProp = CastField<FEnumProperty>(Property))
+    {
+        UEnum* EnumDef = EnumProp->GetEnum();
+        FNumericProperty* Numeric = EnumProp->GetUnderlyingProperty();
+        if (EnumDef && Numeric)
+        {
+            int64 Out = 0;
+            if (Value->Type == EJson::Number) Out = static_cast<int64>(Value->AsNumber());
+            else
+            {
+                FString S = Value->AsString();
+                if (S.Contains(TEXT("::"))) S.Split(TEXT("::"), nullptr, &S);
+                Out = EnumDef->GetValueByNameString(S);
+                if (Out == INDEX_NONE) { OutErrorMessage = FString::Printf(TEXT("Enum value '%s' not found"), *S); return false; }
+            }
+            Numeric->SetIntPropertyValue(PropertyAddr, Out);
+            return true;
+        }
+    }
+
+    OutErrorMessage = FString::Printf(TEXT("Unsupported property type: %s for property %s"),
+                                      *Property->GetClass()->GetName(), *PropertyName);
+    return false;
+}
+
+
+bool FUnrealMCPCommonUtils::WalkPropertyPath(UObject* Root, const FString& Path,
+                                             FPropertyTarget& OutTarget, FString& OutErrorMessage)
+{
+    if (!Root)
+    {
+        OutErrorMessage = TEXT("Null root passed to WalkPropertyPath");
+        return false;
+    }
+
+    TArray<FString> Segments;
+    Path.ParseIntoArray(Segments, TEXT("."));
+    if (Segments.Num() == 0)
+    {
+        OutErrorMessage = TEXT("Empty property path");
+        return false;
+    }
+
+    // Initial state: walking from a UObject root.
+    void*    ContainerAddr = Root;
+    UStruct* ContainerType = Root->GetClass();
+    UObject* OwningObj     = Root;
+
+    // Walk every segment except the last. Each non-leaf hop must be either
+    // FObjectProperty (traverse to inner UObject) or FStructProperty (compute
+    // inner struct address and update container type).
+    for (int32 i = 0; i < Segments.Num() - 1; i++)
+    {
+        const FString& Segment = Segments[i];
+
+        FProperty* Prop = ContainerType->FindPropertyByName(*Segment);
+
+        // Fallback for actor root: try GetComponents() by name. Runtime-added
+        // components may not have UPROPERTY backing on the actor itself.
+        if (!Prop && ContainerAddr == OwningObj)
+        {
+            AActor* AsActor = Cast<AActor>(OwningObj);
+            if (AsActor)
+            {
+                UActorComponent* Found = nullptr;
+                for (UActorComponent* Comp : AsActor->GetComponents())
+                {
+                    if (Comp && Comp->GetName().Equals(Segment, ESearchCase::IgnoreCase))
+                    {
+                        Found = Comp;
+                        break;
+                    }
+                }
+                if (Found)
+                {
+                    ContainerAddr = Found;
+                    ContainerType = Found->GetClass();
+                    OwningObj     = Found;
+                    continue;
+                }
+            }
+        }
+
+        if (!Prop)
+        {
+            OutErrorMessage = FString::Printf(
+                TEXT("Property or component '%s' not found on %s"),
+                *Segment, *ContainerType->GetName());
+            return false;
+        }
+
+        if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
+        {
+            UObject* Next = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(ContainerAddr));
+            if (!Next)
+            {
+                OutErrorMessage = FString::Printf(
+                    TEXT("Path segment '%s' resolves to a null UObject reference"), *Segment);
+                return false;
+            }
+            ContainerAddr = Next;
+            ContainerType = Next->GetClass();
+            OwningObj     = Next;
+            continue;
+        }
+
+        if (FStructProperty* StructProp = CastField<FStructProperty>(Prop))
+        {
+            // Step into the struct: container address moves to the struct's
+            // memory location, container type becomes the struct's UScriptStruct.
+            // OwningObj stays at the last UObject so PostEditChangeProperty
+            // can still notify the editor that the actor's data changed.
+            ContainerAddr = StructProp->ContainerPtrToValuePtr<void>(ContainerAddr);
+            ContainerType = StructProp->Struct;
+            continue;
+        }
+
+        OutErrorMessage = FString::Printf(
+            TEXT("Path segment '%s' is a %s — not traversable (need FObjectProperty or FStructProperty)"),
+            *Segment, *Prop->GetClass()->GetName());
+        return false;
+    }
+
+    OutTarget.ContainerAddress  = ContainerAddr;
+    OutTarget.ContainerType     = ContainerType;
+    OutTarget.OwningObject      = OwningObj;
+    OutTarget.LeafPropertyName  = Segments.Last();
+    OutTarget.OuterPropertyName = Segments[0];
+    return true;
+}
+
+
+bool FUnrealMCPCommonUtils::SetPropertyAtTarget(const FPropertyTarget& Target,
+                                                const TSharedPtr<FJsonValue>& Value,
+                                                FString& OutErrorMessage)
+{
+    if (!Target.ContainerAddress || !Target.ContainerType)
+    {
+        OutErrorMessage = TEXT("Invalid target — null container");
+        return false;
+    }
+
+    FProperty* LeafProp = Target.ContainerType->FindPropertyByName(*Target.LeafPropertyName);
+    if (!LeafProp)
+    {
+        OutErrorMessage = FString::Printf(
+            TEXT("Leaf property '%s' not found on %s"),
+            *Target.LeafPropertyName, *Target.ContainerType->GetName());
+        return false;
+    }
+
+    void* LeafAddr = LeafProp->ContainerPtrToValuePtr<void>(Target.ContainerAddress);
+    return SetValueAtAddress(LeafProp, LeafAddr, Value, OutErrorMessage);
+}

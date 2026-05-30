@@ -416,6 +416,63 @@ def register_asset_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     @mcp.tool()
+    def finalize_migration(
+        ctx: Context,
+        migrated_root: str,
+        target_root: str = "/Game",
+    ) -> Dict[str, Any]:
+        """Fix up serialized references after a subfolder-style migrate_assets.
+
+        Run this in the DESTINATION editor when migrated assets landed under
+        a /Game/<subfolder>/ path (e.g. /Game/Migrated/Megascans/...) and
+        their internal hard refs point at original /Game/Megascans/... paths
+        that don't exist. Symptom: meshes render with checkerboard / default
+        materials despite the materials being present at the migrated paths.
+
+        Implementation: batch-renames every asset under `migrated_root` to
+        the equivalent path under `target_root` using UE's IAssetTools::RenameAssets.
+        That single call handles file moves, internal ref rewrites
+        (mesh→MI→master chains), level-actor ref updates, and redirector
+        creation at the old paths — all atomic, all UE-canonical.
+
+        Args:
+            migrated_root: /Game/-rooted path containing the wrongly-placed
+                           assets (e.g. "/Game/Migrated"). Required.
+            target_root:   Where to move them. Default "/Game" — strips the
+                           offending subfolder so original /Game/Foo/Bar refs
+                           resolve again. Set to a different prefix if you
+                           want to relocate rather than un-prefix.
+
+        Returns:
+            {
+              "success": bool,
+              "renamed_count": N,            # assets actually queued for rename
+              "scanned_count": M,            # assets found under migrated_root
+              "result": "Success"|"Failure"|"Pending",
+              "migrated_root": "...",
+              "target_root": "...",
+              "note": "..."                  # only present on non-Success
+            }
+
+        Idempotent: re-running after a successful finalize is a no-op
+        because there's nothing under migrated_root anymore.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+
+            return _unwrap(unreal.send_command("finalize_migration", {
+                "migrated_root": migrated_root,
+                "target_root":   target_root,
+            }))
+        except Exception as e:
+            logger.error(f"finalize_migration error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
     def import_asset(
         ctx: Context,
         file_path: str,

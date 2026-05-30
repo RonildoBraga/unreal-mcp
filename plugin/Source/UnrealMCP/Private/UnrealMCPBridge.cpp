@@ -240,6 +240,8 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("find_actors_by_name") ||
                      CommandType == TEXT("spawn_actor") ||
                      CommandType == TEXT("create_actor") ||
+                     CommandType == TEXT("spawn_static_mesh_actor") ||
+                     CommandType == TEXT("set_static_mesh_actor_mesh") ||
                      CommandType == TEXT("delete_actor") ||
                      CommandType == TEXT("set_actor_transform") ||
                      CommandType == TEXT("get_actor_properties") ||
@@ -251,7 +253,11 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("set_viewport_camera") ||
                      CommandType == TEXT("execute_console_command") ||
                      CommandType == TEXT("set_cvar") ||
-                     CommandType == TEXT("get_cvar"))
+                     CommandType == TEXT("get_cvar") ||
+                     CommandType == TEXT("get_viewport_mode") ||
+                     CommandType == TEXT("set_viewport_mode") ||
+                     CommandType == TEXT("read_output_log") ||
+                     CommandType == TEXT("get_async_compile_status"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
@@ -296,7 +302,8 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("rename_asset") ||
                      CommandType == TEXT("duplicate_asset") ||
                      CommandType == TEXT("migrate_assets") ||
-                     CommandType == TEXT("import_asset"))
+                     CommandType == TEXT("import_asset") ||
+                     CommandType == TEXT("finalize_migration"))
             {
                 ResultJson = AssetCommands->HandleCommand(CommandType, Params);
             }

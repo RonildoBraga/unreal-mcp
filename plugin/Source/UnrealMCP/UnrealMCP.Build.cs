@@ -34,7 +34,8 @@ public class UnrealMCP : ModuleRules
 				"HTTP",
 				"Json",
 				"JsonUtilities",
-				"DeveloperSettings"
+				"DeveloperSettings",
+				"RenderCore"   // v0.7.7: FlushRenderingCommands for take_screenshot redraw fix
 			}
 		);
 		

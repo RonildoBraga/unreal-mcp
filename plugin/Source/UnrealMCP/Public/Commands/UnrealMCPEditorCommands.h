@@ -20,6 +20,8 @@ private:
     TSharedPtr<FJsonObject> HandleGetActorsInLevel(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleFindActorsByName(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSpawnActor(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSpawnStaticMeshActor(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetStaticMeshActorMesh(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleDeleteActor(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetActorTransform(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetActorProperties(const TSharedPtr<FJsonObject>& Params);
@@ -38,4 +40,10 @@ private:
     TSharedPtr<FJsonObject> HandleExecuteConsoleCommand(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetCVar(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetCVar(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.7.6 — viewport mode + introspection
+    TSharedPtr<FJsonObject> HandleGetViewportMode(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetViewportMode(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleReadOutputLog(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetAsyncCompileStatus(const TSharedPtr<FJsonObject>& Params);
 };

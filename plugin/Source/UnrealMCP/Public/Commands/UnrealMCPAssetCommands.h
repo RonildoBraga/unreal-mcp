@@ -50,4 +50,7 @@ private:
     // Sprint 2 — cross-project migration + asset import
     TSharedPtr<FJsonObject> HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleImportAsset(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.7.3 — fix-up for migrate_assets when caller used a subfolder destination
+    TSharedPtr<FJsonObject> HandleFinalizeMigration(const TSharedPtr<FJsonObject>& Params);
 };

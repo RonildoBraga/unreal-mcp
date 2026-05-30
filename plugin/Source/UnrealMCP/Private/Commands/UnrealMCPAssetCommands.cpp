@@ -80,6 +80,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleCommand(const FString& Co
     if (CommandType == TEXT("duplicate_asset"))        return HandleDuplicateAsset(Params);
     if (CommandType == TEXT("migrate_assets"))         return HandleMigrateAssets(Params);
     if (CommandType == TEXT("import_asset"))           return HandleImportAsset(Params);
+    if (CommandType == TEXT("finalize_migration"))     return HandleFinalizeMigration(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown asset command: %s"), *CommandType));
@@ -693,4 +694,160 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleImportAsset(const TShared
                  "or the import factory raised an error (check editor log)."));
     }
     return Result;
+}
+
+
+// ─── v0.7.3 — finalize_migration ─────────────────────────────────────────────
+//
+// Companion to migrate_assets. After cross-project copy, the migrated .uasset
+// files contain serialized hard refs to their original /Game/-relative paths
+// (e.g. SM_ChapelStructure references /Game/Masters/01_Masters/M_StandardMaster).
+// If migrate_assets put them under a subfolder like /Game/Migrated/, those
+// refs don't resolve in the destination project — materials show as
+// checkerboard defaults.
+//
+// This tool fixes the existing broken state by batch-renaming every asset
+// under `migrated_root` (e.g. "/Game/Migrated") to `target_root` (default
+// "/Game"), stripping the offending subfolder. UE's FAssetRenameManager
+// handles the heavy lifting: file moves on disk, ref updates across the
+// entire content tree (mesh → MI → master chains), level-actor ref updates,
+// and redirector creation at the old paths for any external references.
+//
+// One call, all paths fixed. Idempotent (re-running on already-renamed
+// content is a no-op).
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFinalizeMigration(const TSharedPtr<FJsonObject>& Params)
+{
+    FString MigratedRoot;
+    if (!Params->TryGetStringField(TEXT("migrated_root"), MigratedRoot) || MigratedRoot.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing 'migrated_root' parameter (e.g. '/Game/Migrated')"));
+    }
+    FString TargetRoot = TEXT("/Game");
+    Params->TryGetStringField(TEXT("target_root"), TargetRoot);
+    if (TargetRoot.IsEmpty())
+    {
+        TargetRoot = TEXT("/Game");
+    }
+
+    // Normalize: drop trailing slashes so we can do clean string-replace operations
+    while (MigratedRoot.EndsWith(TEXT("/")))
+    {
+        MigratedRoot.LeftChopInline(1, EAllowShrinking::No);
+    }
+    while (TargetRoot.EndsWith(TEXT("/")))
+    {
+        TargetRoot.LeftChopInline(1, EAllowShrinking::No);
+    }
+
+    // Safety: both must start with /Game/ to avoid going outside content tree
+    if (!MigratedRoot.StartsWith(TEXT("/Game")) || !TargetRoot.StartsWith(TEXT("/Game")))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Both 'migrated_root' and 'target_root' must be /Game/-rooted paths"));
+    }
+    if (MigratedRoot.Equals(TargetRoot))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("'migrated_root' equals 'target_root' — nothing to do"));
+    }
+
+    IAssetRegistry* Registry = GetRegistry();
+    if (!Registry)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("AssetRegistry module unavailable"));
+    }
+
+    // Enumerate every asset that currently sits under migrated_root.
+    // bSearchSubClasses=true is the default; we explicitly want recursive=true
+    // so nested folders (Masters/01_Masters/BaseTextures/...) are included.
+    TArray<FAssetData> Assets;
+    Registry->GetAssetsByPath(FName(*MigratedRoot), Assets, /*bRecursive=*/ true);
+
+    if (Assets.Num() == 0)
+    {
+        TSharedPtr<FJsonObject> Empty = MakeShared<FJsonObject>();
+        Empty->SetBoolField(TEXT("success"), true);
+        Empty->SetNumberField(TEXT("renamed_count"), 0);
+        Empty->SetStringField(TEXT("note"),
+            FString::Printf(TEXT("No assets found under %s — nothing to finalize"), *MigratedRoot));
+        return Empty;
+    }
+
+    // Build the rename batch. Each entry maps the asset from its current
+    // package path under migrated_root to the equivalent path under target_root.
+    TArray<FAssetRenameData> RenameList;
+    RenameList.Reserve(Assets.Num());
+
+    for (const FAssetData& AssetData : Assets)
+    {
+        const FString OldPackageName = AssetData.PackageName.ToString();      // e.g. /Game/Migrated/Masters/01_Masters/M_StandardMaster
+        const FString OldPackagePath = AssetData.PackagePath.ToString();      // e.g. /Game/Migrated/Masters/01_Masters
+
+        // Map old → new by string substitution at the front of the path.
+        FString NewPackagePath = OldPackagePath;
+        if (!NewPackagePath.StartsWith(MigratedRoot))
+        {
+            // Asset registry returned something outside our root — shouldn't
+            // happen given GetAssetsByPath semantics, but skip defensively.
+            continue;
+        }
+        NewPackagePath.RemoveFromStart(MigratedRoot);
+        NewPackagePath = TargetRoot + NewPackagePath;
+
+        // GetAsset() forces a load; required because FAssetRenameManager
+        // operates on already-loaded UObjects (it rewrites refs on UObject
+        // graphs, not raw .uasset bytes).
+        UObject* Asset = AssetData.GetAsset();
+        if (!Asset)
+        {
+            continue;
+        }
+
+        FAssetRenameData Data;
+        Data.Asset = Asset;
+        Data.OldObjectPath = AssetData.GetSoftObjectPath().ToString();
+        Data.NewPackagePath = NewPackagePath;
+        Data.NewName = AssetData.AssetName.ToString();
+        RenameList.Add(MoveTemp(Data));
+    }
+
+    if (RenameList.Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("No assets could be loaded for rename. Possible causes: "
+                 "asset registry stale (try AssetRegistry::ScanFilesSynchronous), "
+                 "or all assets failed to load."));
+    }
+
+    FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+    IAssetTools& AssetTools = AssetToolsModule.Get();
+
+    // RenameAssets does the whole job: file move, ref updates across the
+    // content tree (including level actor refs), redirector creation at the
+    // old paths. UE 5.7 returns bool (true=success, false=failure); older
+    // versions returned an EAssetRenameResult enum.
+    const bool bSuccess = AssetTools.RenameAssets(RenameList);
+
+    TSharedPtr<FJsonObject> Out = MakeShared<FJsonObject>();
+    Out->SetBoolField(TEXT("success"), bSuccess);
+    Out->SetNumberField(TEXT("renamed_count"), RenameList.Num());
+    Out->SetNumberField(TEXT("scanned_count"), Assets.Num());
+    Out->SetStringField(TEXT("migrated_root"), MigratedRoot);
+    Out->SetStringField(TEXT("target_root"), TargetRoot);
+    Out->SetStringField(TEXT("result"), bSuccess ? TEXT("Success") : TEXT("Failure"));
+    if (!bSuccess)
+    {
+        Out->SetStringField(TEXT("note"),
+            TEXT("RenameAssets returned false. Common causes: "
+                 "(a) one or more assets are referenced by a C++ ConstructorHelpers path "
+                 "(CDO-pinned — see feedback_unreal_rename_asset_cdo_pin.md); "
+                 "(b) destination path conflict (an asset already exists at the new path); "
+                 "(c) checkout failed for source-controlled content. "
+                 "Check the editor log for per-asset error details. Partial success "
+                 "is possible — some assets may have moved successfully even when the "
+                 "overall call returned false."));
+    }
+    return Out;
 }

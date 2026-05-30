@@ -5,8 +5,17 @@ This module provides tools for controlling the Unreal Editor viewport and other 
 """
 
 import logging
-from typing import Dict, List, Any, Optional
-from mcp.server.fastmcp import FastMCP, Context
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+from mcp.server.fastmcp import Context, FastMCP
+
+try:
+    # FastMCP's Image content type — lets tools return image bytes inline
+    # so the LLM sees the screenshot rather than just a file path.
+    from mcp.server.fastmcp.utilities.types import Image
+except ImportError:  # older FastMCP fallback
+    Image = None  # type: ignore[assignment, misc]
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
@@ -142,7 +151,104 @@ def register_editor_tools(mcp: FastMCP):
             error_msg = f"Error creating actor: {e}"
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
-    
+
+    @mcp.tool()
+    def spawn_static_mesh_actor(
+        ctx: Context,
+        name: str,
+        mesh_path: str,
+        location: List[float] = [0.0, 0.0, 0.0],
+        rotation: List[float] = [0.0, 0.0, 0.0],
+        scale: List[float] = [1.0, 1.0, 1.0],
+        folder_path: str = "",
+    ) -> Dict[str, Any]:
+        """Spawn a StaticMeshActor and assign its mesh in one call.
+
+        This is the ergonomic path for placing Megascans / Quixel assets from
+        the /Game/Migrated/ tree. Internally combines spawn_actor (StaticMeshActor)
+        with a mesh-load + SetStaticMesh on the component, sidestepping the fact
+        that set_actor_property cannot reach the inner UStaticMeshComponent::StaticMesh.
+
+        Args:
+            name:        Unique actor name in the level.
+            mesh_path:   /Game/-prefixed object path of the StaticMesh
+                         (e.g. "/Game/Migrated/.../SM_RomanColumn_01.SM_RomanColumn_01").
+                         Bare package path without the trailing object suffix
+                         also works.
+            location:    [x, y, z] world cm.
+            rotation:    [pitch, yaw, roll] degrees.
+            scale:       [x, y, z] uniform-or-non-uniform scale. Default [1,1,1].
+            folder_path: Optional Outliner folder for organization
+                         (e.g. "Sanctuary/Columns"). Empty = root.
+
+        Returns:
+            The created actor's details (same shape as spawn_actor).
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            for param_name, vec in (("location", location), ("rotation", rotation), ("scale", scale)):
+                if not isinstance(vec, list) or len(vec) != 3:
+                    return {"success": False, "message": f"Invalid {param_name} format. Must be a list of 3 float values."}
+
+            params = {
+                "name": name,
+                "mesh_path": mesh_path,
+                "location": [float(v) for v in location],
+                "rotation": [float(v) for v in rotation],
+                "scale":    [float(v) for v in scale],
+            }
+            if folder_path:
+                params["folder_path"] = folder_path
+
+            response = unreal.send_command("spawn_static_mesh_actor", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"Error spawning static mesh actor: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def set_static_mesh_actor_mesh(ctx: Context, name: str, mesh_path: str) -> Dict[str, Any]:
+        """Swap the mesh on an existing StaticMeshActor (in-place).
+
+        Useful for replacing placeholders, cycling through Megascans variants,
+        or fixing up legacy actors after asset migration.
+
+        Args:
+            name:      Actor name in the current level.
+            mesh_path: /Game/-prefixed object path of the new StaticMesh.
+
+        Returns:
+            Updated actor details on success, error dict otherwise.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            response = unreal.send_command("set_static_mesh_actor_mesh", {
+                "name": name,
+                "mesh_path": mesh_path,
+            })
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"Error setting static mesh: {e}")
+            return {"success": False, "message": str(e)}
+
     @mcp.tool()
     def delete_actor(ctx: Context, name: str) -> Dict[str, Any]:
         """Delete an actor by name."""
@@ -369,25 +475,66 @@ def register_editor_tools(mcp: FastMCP):
     # ─── Sprint 1 — editor state extensions ─────────────────────────────────
 
     @mcp.tool()
-    def take_screenshot(ctx: Context, filename: str = "screenshot.png", show_ui: bool = False) -> Dict[str, Any]:
-        """Capture a screenshot of the active editor viewport to a file.
+    def take_screenshot(
+        ctx: Context,
+        filename: str = "screenshot.png",
+        show_ui: bool = False,
+    ) -> Union["Image", Dict[str, Any]]:  # type: ignore[name-defined]
+        """Capture a screenshot of the active editor viewport.
+
+        Returns the PNG inline as an MCP Image (so the calling LLM can see it
+        directly), with the absolute filepath also recorded on disk for
+        long-term reference.
 
         Args:
-            filename: Output filename. Relative paths land under <Project>/Saved/.
-                      Default "screenshot.png".
-            show_ui:  Include editor UI gizmos in the capture (sprites, grids,
-                      selection outlines). Default False — cleaner screenshots
-                      better for visual evaluation.
+            filename: Output filename. Bare names ("screenshot.png") land under
+                      <Project>/Saved/Screenshots/. Absolute paths are honored
+                      verbatim. ".png" is appended if missing. Default
+                      "screenshot.png".
+            show_ui:  Include editor UI gizmos (selection outlines, grids).
+                      Default False — cleaner captures for visual evaluation.
+                      (Currently advisory only; UE's editor viewport screenshot
+                      path captures whatever the active viewport renders.)
 
         Returns:
-            {"filepath": "...absolute path..."}  on success.
+            On success: a FastMCP Image content block containing the PNG.
+            On failure: an error dict — most commonly because the editor has
+            no active viewport, or the destination path can't be written.
         """
         from unreal_mcp_server import get_unreal_connection
         try:
             unreal = get_unreal_connection()
             if not unreal:
                 return {"error": "Failed to connect to Unreal Engine"}
-            return unreal.send_command("take_screenshot", {"filename": filename, "show_ui": show_ui}) or {}
+
+            # C++ side accepts both "filepath" and "filename" since v0.7.2; we
+            # send "filepath" — it's the original wire-format name and matches
+            # what the handler primarily reads.
+            response = unreal.send_command(
+                "take_screenshot",
+                {"filepath": filename, "show_ui": show_ui},
+            )
+            if not response:
+                return {"error": "No response from Unreal Engine"}
+            if response.get("status") == "error":
+                return {"error": response.get("error", "Unknown error")}
+
+            # Plugin returns the absolute path of the saved PNG. Read it back
+            # and hand the bytes to the LLM as inline image content.
+            payload = response.get("result", response)
+            abs_path = payload.get("filepath") if isinstance(payload, dict) else None
+            if not abs_path:
+                return {"error": "Response missing filepath", "raw": response}
+
+            png_path = Path(abs_path)
+            if not png_path.exists():
+                return {"error": f"Screenshot saved but file not found at {abs_path}"}
+
+            if Image is None:
+                # FastMCP too old to support Image type — fall back to path.
+                return {"filepath": str(png_path), "size_bytes": png_path.stat().st_size}
+
+            return Image(path=str(png_path))
         except Exception as e:
             logger.error(f"take_screenshot error: {e}")
             return {"error": str(e)}
@@ -532,6 +679,100 @@ def register_editor_tools(mcp: FastMCP):
             return response or {"error": "no response"}
         except Exception as e:
             logger.error(f"get_cvar error: {e}")
+            return {"error": str(e)}
+
+    # ─── v0.7.6 — viewport mode + editor introspection ─────────────────────
+
+    @mcp.tool()
+    def get_viewport_mode(ctx: Context) -> Dict[str, Any]:
+        """Get the current editor viewport render mode.
+
+        Returns:
+            {"mode": "Lit"|"Unlit"|"Wireframe"|..., "mode_index": int}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("get_viewport_mode", {}) or {}
+        except Exception as e:
+            logger.error(f"get_viewport_mode error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def set_viewport_mode(ctx: Context, mode: str) -> Dict[str, Any]:
+        """Set the active editor viewport render mode.
+
+        Args:
+            mode: One of "Lit", "Unlit", "Wireframe", "BrushWireframe",
+                  "DetailLighting", "LightingOnly", "LightComplexity",
+                  "ShaderComplexity", "LightmapDensity", "ReflectionOverride",
+                  "VisualizeBuffer", "PathTracing". Case-insensitive.
+
+        Returns:
+            {"mode": "...", "mode_index": int, "success": True}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("set_viewport_mode", {"mode": mode}) or {}
+        except Exception as e:
+            logger.error(f"set_viewport_mode error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def read_output_log(ctx: Context, lines: int = 50) -> Dict[str, Any]:
+        """Read the last N lines of the editor's Output Log.
+
+        Useful for diagnosing what UE logged during a recent operation —
+        especially after migrate_assets, finalize_migration, or any tool
+        that returned a non-obvious error.
+
+        Args:
+            lines: Number of trailing lines to return. Clamped to [1, 5000].
+                   Default 50.
+
+        Returns:
+            {
+              "log_path":      "<absolute path to .log>",
+              "total_lines":   N,
+              "returned_lines": K,
+              "lines": ["...", "...", ...]
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("read_output_log", {"lines": lines}) or {}
+        except Exception as e:
+            logger.error(f"read_output_log error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_async_compile_status(ctx: Context) -> Dict[str, Any]:
+        """Snapshot the editor's async compile queues.
+
+        Reports remaining shader-compile jobs + total asset-compile jobs
+        (StaticMesh, Texture, etc.). Used to detect stalls before invoking
+        heavy operations like finalize_migration. is_idle=True means there
+        are no pending compiles right now.
+
+        Returns:
+            {"shader_jobs": N, "asset_compiles": M, "is_idle": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("get_async_compile_status", {}) or {}
+        except Exception as e:
+            logger.error(f"get_async_compile_status error: {e}")
             return {"error": str(e)}
 
     logger.info("Editor tools registered successfully")

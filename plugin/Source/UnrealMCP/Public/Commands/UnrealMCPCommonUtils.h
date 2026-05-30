@@ -54,6 +54,49 @@ public:
     static UK2Node_Event* FindExistingEventNode(UEdGraph* Graph, const FString& EventName);
 
     // Property utilities
-    static bool SetObjectProperty(UObject* Object, const FString& PropertyName, 
+    static bool SetObjectProperty(UObject* Object, const FString& PropertyName,
                                  const TSharedPtr<FJsonValue>& Value, FString& OutErrorMessage);
-}; 
+
+    /**
+     * v0.7.4 / v0.7.5 — describes where a dotted-path resolution ends up.
+     *
+     * `ContainerAddress` + `ContainerType` define what UE reflection needs to
+     * look up the leaf property and set its value: a raw pointer to a UObject
+     * or a struct, plus the UClass / UScriptStruct that describes the layout.
+     * `OwningObject` is the nearest enclosing UObject (used for
+     * `PostEditChangeProperty` so the editor refreshes), and `OuterPropertyName`
+     * is the first path segment — handed to `PostEditChangeProperty` so the
+     * editor knows which top-level actor UPROPERTY conceptually changed.
+     */
+    struct FPropertyTarget
+    {
+        void*    ContainerAddress  = nullptr;
+        UStruct* ContainerType     = nullptr;
+        UObject* OwningObject      = nullptr;
+        FString  LeafPropertyName;
+        FString  OuterPropertyName;
+    };
+
+    /**
+     * Walk a dotted property path through FObjectProperty and FStructProperty
+     * hops. Examples that all work:
+     *   - "Intensity"                                      (plain — passes through)
+     *   - "PointLightComponent.Intensity"                  (object hop → leaf)
+     *   - "Settings.AutoExposureBias"                      (struct hop → leaf, v0.7.5)
+     *   - "Settings.ColorGrading.Highlights.Saturation"    (nested struct chain, v0.7.5)
+     *   - "PointLightComponent.LightFunctionMaterial"      (object hop → object leaf)
+     *
+     * On any failure (missing property, non-traversable hop, null ref) returns
+     * false with OutErrorMessage describing where it broke.
+     */
+    static bool WalkPropertyPath(UObject* Root, const FString& Path,
+                                 FPropertyTarget& OutTarget, FString& OutErrorMessage);
+
+    /**
+     * Set a JSON value at the leaf of a resolved FPropertyTarget. Handles every
+     * type SetObjectProperty handles — they share an internal dispatch helper.
+     */
+    static bool SetPropertyAtTarget(const FPropertyTarget& Target,
+                                    const TSharedPtr<FJsonValue>& Value,
+                                    FString& OutErrorMessage);
+};

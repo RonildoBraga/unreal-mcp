@@ -288,7 +288,8 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("move_asset") ||
                      CommandType == TEXT("delete_asset") ||
                      CommandType == TEXT("rename_asset") ||
-                     CommandType == TEXT("duplicate_asset"))
+                     CommandType == TEXT("duplicate_asset") ||
+                     CommandType == TEXT("migrate_assets"))
             {
                 ResultJson = AssetCommands->HandleCommand(CommandType, Params);
             }

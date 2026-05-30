@@ -4,17 +4,74 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
-## [Unreleased]
+## [Unreleased] — Sprint 2 in progress
 
-Sprint 2 planning (see Lauder project roadmap):
+Sprint 2 status — landing v0.5.x as each tool ships:
 
-- **Asset import + migrate (~5 tools)** — `import_fbx`, `import_texture`, `import_audio`, `migrate_assets_from_project`, `cook_for_migration`. The migrate tool unblocks Phase 7.2/7.3 — cross-project asset moves from sample projects into Lauder.
-- **Materials category (~5 tools)** — `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`.
-- **Outliner / organization (~4 tools)** — `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`.
+- **v0.5.0 (today): `migrate_assets`** — see entry below. The killer tool for Phase 7.2/7.3.
+- Pending: `import_fbx`, `import_texture`, `import_audio`, `cook_for_migration` (asset import category, 4 tools)
+- Pending: materials category (~5 tools): `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`
+- Pending: outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
 
-Deferred to Sprint 2 from Sprint 1:
+Deferred to Sprint 2 from Sprint 1 (still pending):
 
 - **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7 deprecates `FImageUtils::CompressImageArray` in favor of `PNGCompressImageArray`, but the new API uses `TArrayView64<const FColor>` + `TArray64<uint8>`, which requires rewriting the surrounding `ReadPixels` path. The deprecation only emits a warning today (hard error in a future release) so it's safe to defer.
+
+## [0.5.0] — 2026-05-31 — Sprint 2 kickoff: cross-project asset migration
+
+### Added — `migrate_assets` (asset management category)
+
+The headlining Sprint 2 tool. Copies a set of `/Game/`-prefixed assets — plus
+their dependency closure — from the currently-loaded editor project to
+another project's `Content/` directory.
+
+**Implementation approach:** rather than calling `IAssetTools::MigratePackages`
+(which drives a modal "select destination project" dialog and has non-UI
+overloads that vary across UE 5.x point releases), we compute the dependency
+closure via `IAssetRegistry::GetDependencies` and copy the underlying
+`.uasset` / `.umap` files via `IFileManager::Copy`, preserving the
+`/Game/`-relative directory layout at the destination. This is exactly what
+UE's Migrate workflow does internally for the file-copy step — just headless
+(no modal dialog), idempotent (skips existing files unless `force_overwrite=True`),
+and stable across UE versions.
+
+**Use case driving the work:** Lauder Phase 7.2 — migrating selected
+Goddess Temple Megascans Sample assets (the ones the v0.2.0 asset tools
+inventoried) from the RomanCave editor session into the Lauder3 project's
+`Content/Migrated/` folder programmatically.
+
+**Args:**
+- `asset_paths: List[str]` — `/Game/`-prefixed object paths
+- `destination_content_path: str` — absolute filesystem path to target project's `Content/`
+- `include_dependencies: bool = True` — walk the transitive `/Game/` dependency graph
+- `force_overwrite: bool = False` — idempotent by default
+
+**Returns:**
+```
+{
+  "success": bool,
+  "initial_count": N,             # how many paths you asked for
+  "total_with_dependencies": M,    # incl. transitive /Game/ deps
+  "copied_count": K,              # files actually copied
+  "skipped_count": S,             # existed at destination + no overwrite
+  "destination_root": "...",
+  "include_dependencies": bool,
+  "errors": [...]
+}
+```
+
+C++ side: `plugin/Source/UnrealMCP/Private/Commands/UnrealMCPAssetCommands.cpp`
++ header. Python wrapper: `server/tools/asset_tools.py`.
+
+### Verified
+
+Live Coding patch against UE 5.7 LauderEditor: 14s incremental, all 3
+affected TUs (Bridge, AssetCommands, Module) compiled clean, patch linked
+successfully, plugin DLL updated in-place in the running editor. The
+pre-existing `CompressImageArray` deprecation warning (Sprint 1 deferred
+item) is unchanged.
+
+## [0.4.0] — 2026-05-30 — Repo restructure for clarity
 - **Level management category (~9 tools)** — `get_current_level`, `open_level`, `save_level`, `save_all_dirty`, `create_level`, `list_levels_in_project`, `check_map_errors`, `build_lighting`, `add_streaming_sublevel`
 - **Asset import / migrate (~5 tools)** — `import_fbx`, `import_texture`, `import_audio`, `migrate_assets_from_project`, `cook_for_migration`
 - **Materials category (~5 tools)** — `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`

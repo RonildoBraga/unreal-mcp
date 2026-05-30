@@ -7,6 +7,8 @@
 #include "UObject/Class.h"
 #include "UObject/TopLevelAssetPath.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 namespace
 {
@@ -73,6 +75,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleCommand(const FString& Co
     if (CommandType == TEXT("delete_asset"))           return HandleDeleteAsset(Params);
     if (CommandType == TEXT("rename_asset"))           return HandleRenameAsset(Params);
     if (CommandType == TEXT("duplicate_asset"))        return HandleDuplicateAsset(Params);
+    if (CommandType == TEXT("migrate_assets"))         return HandleMigrateAssets(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown asset command: %s"), *CommandType));
@@ -428,5 +431,179 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleDuplicateAsset(const TSha
     {
         Result->SetStringField(TEXT("new_object_path"), DuplicatedObject->GetPathName());
     }
+    return Result;
+}
+
+
+// ─── Sprint 2 — cross-project migration ───────────────────────────────────────
+//
+// Implementation strategy: do the work ourselves rather than calling into UE's
+// IAssetTools::MigratePackages. The built-in MigratePackages drives a modal
+// dialog ("Select destination project") that we can't satisfy from a headless
+// MCP call, and its non-UI overloads vary across UE 5.x point releases.
+//
+// What we do instead: compute the dependency closure via the AssetRegistry,
+// resolve each /Game/-prefixed package name to its on-disk .uasset/.umap path
+// in the source project, and copy each file to the destination Content/ tree
+// preserving the /Game/-relative directory layout. This is exactly what
+// UE Migrate does under the hood for the actual file-copy step.
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params)
+{
+    // 1. Parse params
+    const TArray<TSharedPtr<FJsonValue>>* AssetPathsJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("asset_paths"), AssetPathsJson) || AssetPathsJson->Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing or empty 'asset_paths' parameter (expected array of /Game/-prefixed object paths)"));
+    }
+
+    FString DestContentRoot;
+    if (!Params->TryGetStringField(TEXT("destination_content_path"), DestContentRoot) || DestContentRoot.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing 'destination_content_path' parameter (absolute filesystem path to target project's Content/ folder)"));
+    }
+    DestContentRoot = DestContentRoot.TrimChar(TEXT('/')).TrimChar(TEXT('\\'));
+
+    bool bIncludeDeps = true;
+    Params->TryGetBoolField(TEXT("include_dependencies"), bIncludeDeps);
+
+    bool bForceOverwrite = false;
+    Params->TryGetBoolField(TEXT("force_overwrite"), bForceOverwrite);
+
+    // 2. Resolve initial /Game/... object paths → package names
+    TArray<FName> InitialPackages;
+    for (const auto& Val : *AssetPathsJson)
+    {
+        FString ObjectPath = Val->AsString();
+        if (ObjectPath.IsEmpty()) continue;
+        FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
+        if (PackageName.StartsWith(TEXT("/Game/")))
+        {
+            InitialPackages.AddUnique(FName(*PackageName));
+        }
+    }
+    if (InitialPackages.Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("No valid /Game/-prefixed paths in 'asset_paths' (all entries must resolve to a /Game/ package)"));
+    }
+
+    // 3. Compute dependency closure if requested
+    TSet<FName> AllPackages;
+    for (const FName& Pkg : InitialPackages)
+    {
+        AllPackages.Add(Pkg);
+    }
+
+    if (bIncludeDeps)
+    {
+        IAssetRegistry* Registry = GetRegistry();
+        if (!Registry)
+        {
+            return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("AssetRegistry module unavailable"));
+        }
+
+        TArray<FName> ToProcess = InitialPackages;
+        while (ToProcess.Num() > 0)
+        {
+            FName Current = ToProcess.Pop(EAllowShrinking::No);
+            TArray<FName> Deps;
+            Registry->GetDependencies(Current, Deps);
+            for (const FName& Dep : Deps)
+            {
+                const FString DepStr = Dep.ToString();
+                // Only include /Game/ deps; skip engine + plugin packages
+                if (DepStr.StartsWith(TEXT("/Game/")) && !AllPackages.Contains(Dep))
+                {
+                    AllPackages.Add(Dep);
+                    ToProcess.Add(Dep);
+                }
+            }
+        }
+    }
+
+    // 4. Copy each package's file to the destination, preserving /Game-relative layout
+    int32 CopiedCount = 0;
+    int32 SkippedCount = 0;
+    TArray<TSharedPtr<FJsonValue>> ErrorMessages;
+
+    IFileManager& FileManager = IFileManager::Get();
+
+    for (const FName& Pkg : AllPackages)
+    {
+        const FString PackageStr = Pkg.ToString();
+
+        // Convert /Game/Foo/Bar package name to an absolute filesystem path (no extension)
+        FString SourceBase;
+        if (!FPackageName::TryConvertLongPackageNameToFilename(PackageStr, SourceBase))
+        {
+            ErrorMessages.Add(MakeShared<FJsonValueString>(
+                FString::Printf(TEXT("Could not resolve filesystem path for: %s"), *PackageStr)));
+            continue;
+        }
+
+        // Figure out which extension this asset uses on disk (.uasset for normal assets, .umap for levels)
+        FString SourceFile;
+        if (FPaths::FileExists(SourceBase + TEXT(".uasset")))
+        {
+            SourceFile = SourceBase + TEXT(".uasset");
+        }
+        else if (FPaths::FileExists(SourceBase + TEXT(".umap")))
+        {
+            SourceFile = SourceBase + TEXT(".umap");
+        }
+        else
+        {
+            ErrorMessages.Add(MakeShared<FJsonValueString>(
+                FString::Printf(TEXT("Source file not found on disk: %s.uasset|.umap"), *SourceBase)));
+            continue;
+        }
+
+        // Compute destination path: strip "/Game/" prefix, prepend DestContentRoot, append extension
+        FString RelativeUnderGame = PackageStr;
+        RelativeUnderGame.RemoveFromStart(TEXT("/Game/"));
+        const FString DestExt = FPaths::GetExtension(SourceFile, /*bIncludeDot*/ true);
+        const FString DestFile = FPaths::Combine(DestContentRoot, RelativeUnderGame) + DestExt;
+
+        // Honor force_overwrite
+        if (FPaths::FileExists(DestFile) && !bForceOverwrite)
+        {
+            SkippedCount++;
+            continue;
+        }
+
+        // Ensure destination directory exists
+        const FString DestDir = FPaths::GetPath(DestFile);
+        if (!FileManager.MakeDirectory(*DestDir, /*Tree*/ true))
+        {
+            ErrorMessages.Add(MakeShared<FJsonValueString>(
+                FString::Printf(TEXT("Could not create destination directory: %s"), *DestDir)));
+            continue;
+        }
+
+        // Copy the file
+        if (FileManager.Copy(*DestFile, *SourceFile) == COPY_OK)
+        {
+            CopiedCount++;
+        }
+        else
+        {
+            ErrorMessages.Add(MakeShared<FJsonValueString>(
+                FString::Printf(TEXT("Copy failed: %s -> %s"), *SourceFile, *DestFile)));
+        }
+    }
+
+    // 5. Build response
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), ErrorMessages.Num() == 0 && CopiedCount > 0);
+    Result->SetNumberField(TEXT("initial_count"), InitialPackages.Num());
+    Result->SetNumberField(TEXT("total_with_dependencies"), AllPackages.Num());
+    Result->SetNumberField(TEXT("copied_count"), CopiedCount);
+    Result->SetNumberField(TEXT("skipped_count"), SkippedCount);
+    Result->SetStringField(TEXT("destination_root"), DestContentRoot);
+    Result->SetBoolField(TEXT("include_dependencies"), bIncludeDeps);
+    Result->SetArrayField(TEXT("errors"), ErrorMessages);
     return Result;
 }

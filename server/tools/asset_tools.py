@@ -344,3 +344,73 @@ def register_asset_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"duplicate_asset error: {e}")
             return {"error": str(e)}
+
+    # ─── Sprint 2 — cross-project migration ──────────────────────────────────
+
+    @mcp.tool()
+    def migrate_assets(
+        ctx: Context,
+        asset_paths: List[str],
+        destination_content_path: str,
+        include_dependencies: bool = True,
+        force_overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        """Copy assets from the current editor's project to another project's Content dir.
+
+        Designed for the Lauder Phase 7.2 use case: editor open on the source
+        sample project (Goddess Temple, Dark Ruins, etc.), MCP call drives
+        copy of selected assets + their dependency closure into the target
+        project's Content folder, preserving /Game/-relative directory layout.
+
+        Implementation: walks the AssetRegistry for dependencies, then copies
+        the underlying .uasset / .umap files via IFileManager. Equivalent to
+        UE's "Migrate" workflow's file-copy step but headless (no modal
+        dialog) and idempotent (skips existing files unless force_overwrite).
+
+        Args:
+            asset_paths:               List of /Game/-prefixed object paths to migrate.
+                                       Must be assets visible in the currently-loaded
+                                       editor's asset registry.
+            destination_content_path:  Absolute filesystem path to the target project's
+                                       Content/ folder. Subfolders created automatically.
+            include_dependencies:      Whether to also migrate every /Game/ asset that
+                                       the named assets depend on. Default True.
+                                       Engine + plugin packages always skipped.
+            force_overwrite:           Whether to overwrite existing files at destination.
+                                       Default False (existing files counted in
+                                       skipped_count instead).
+
+        Returns:
+            {
+              "success": bool,
+              "initial_count": N,                    # how many /Game/ paths you asked for
+              "total_with_dependencies": M,           # incl. transitive /Game/ deps
+              "copied_count": K,                     # files actually copied
+              "skipped_count": S,                    # existed at destination + no overwrite
+              "destination_root": "...",
+              "include_dependencies": bool,
+              "errors": ["...", ...]                 # per-file error strings, empty on full success
+            }
+
+        After migration: open the destination project in UE and let it auto-discover
+        the new assets, or refresh the Content Browser. References from migrated
+        assets to /Game/ assets you didn't include will break (show as missing).
+        Engine + plugin references survive (they resolve in any project).
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+
+            return _unwrap(unreal.send_command("migrate_assets", {
+                "asset_paths": asset_paths,
+                "destination_content_path": destination_content_path,
+                "include_dependencies": include_dependencies,
+                "force_overwrite": force_overwrite,
+            }))
+
+        except Exception as e:
+            logger.error(f"migrate_assets error: {e}")
+            return {"error": str(e)}

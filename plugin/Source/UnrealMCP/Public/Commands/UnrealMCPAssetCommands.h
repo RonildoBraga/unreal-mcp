@@ -20,6 +20,9 @@
  *   delete_asset             — delete an asset (creates a redirector)
  *   rename_asset             — change asset's leaf name in place
  *   duplicate_asset          — copy to a new path
+ *
+ * Sprint 2:
+ *   migrate_assets           — copy assets + deps to another project's Content dir
  */
 class UNREALMCP_API FUnrealMCPAssetCommands
 {
@@ -42,4 +45,7 @@ private:
     TSharedPtr<FJsonObject> HandleDeleteAsset(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleRenameAsset(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params);
+
+    // Sprint 2 — cross-project migration
+    TSharedPtr<FJsonObject> HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params);
 };

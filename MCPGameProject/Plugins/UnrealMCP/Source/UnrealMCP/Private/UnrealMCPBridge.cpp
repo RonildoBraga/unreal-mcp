@@ -274,7 +274,16 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("bind_widget_event") ||
                      CommandType == TEXT("set_text_block_binding") ||
-                     CommandType == TEXT("add_widget_to_viewport"))
+                     CommandType == TEXT("add_widget_to_viewport") ||
+                     // v2 commands: path-flexible, parent-aware, with property setters
+                     CommandType == TEXT("add_widget_to_tree") ||
+                     CommandType == TEXT("set_widget_text") ||
+                     CommandType == TEXT("set_progress_bar_percent") ||
+                     CommandType == TEXT("set_progress_bar_fill_color") ||
+                     CommandType == TEXT("set_horizontal_box_slot_fill") ||
+                     CommandType == TEXT("set_canvas_slot_anchor") ||
+                     CommandType == TEXT("delete_widget_from_tree") ||
+                     CommandType == TEXT("compile_widget_blueprint"))
             {
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
             }

@@ -1,14 +1,22 @@
 <div align="center">
 
 # Model Context Protocol for Unreal Engine
-<span style="color: #555555">unreal-mcp</span>
+<span style="color: #555555">unreal-mcp — extended fork</span>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.5%2B-orange)](https://www.unrealengine.com)
+[![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.7%2B-orange)](https://www.unrealengine.com)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow)](https://www.python.org)
-[![Status](https://img.shields.io/badge/Status-Experimental-red)](https://github.com/chongdashu/unreal-mcp)
+[![Status](https://img.shields.io/badge/Status-Experimental-red)](https://github.com/RonildoBraga/unreal-mcp)
 
 </div>
+
+> **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. It adds:
+>
+> - **UE 5.7 compatibility patches** (`ANY_PACKAGE` removal in UE 5.5+, `BufferSize` name collision with `TCHAR_TO_UTF8` internals — see `CHANGELOG.md`)
+> - **Phase 5.3 UMG endpoint extensions** (~435 lines) for HUD-style widget work
+> - **Planned 50+ additional tools** across asset management, materials, Niagara, level management, performance profiling — see project roadmap
+>
+> Original upstream remains MIT-licensed; this fork preserves the license and attribution. For the unmodified original, go to [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp).
 
 This project enables AI assistant clients like Cursor, Windsurf and Claude Desktop to control Unreal Engine through natural language using the Model Context Protocol (MCP).
 

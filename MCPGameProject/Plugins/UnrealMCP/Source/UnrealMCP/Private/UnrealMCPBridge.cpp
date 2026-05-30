@@ -57,6 +57,7 @@
 #include "Commands/UnrealMCPProjectCommands.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Commands/UnrealMCPUMGCommands.h"
+#include "Commands/UnrealMCPAssetCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -69,6 +70,7 @@ UUnrealMCPBridge::UUnrealMCPBridge()
     BlueprintNodeCommands = MakeShared<FUnrealMCPBlueprintNodeCommands>();
     ProjectCommands = MakeShared<FUnrealMCPProjectCommands>();
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
+    AssetCommands = MakeShared<FUnrealMCPAssetCommands>();
 }
 
 UUnrealMCPBridge::~UUnrealMCPBridge()
@@ -78,6 +80,7 @@ UUnrealMCPBridge::~UUnrealMCPBridge()
     BlueprintNodeCommands.Reset();
     ProjectCommands.Reset();
     UMGCommands.Reset();
+    AssetCommands.Reset();
 }
 
 // Initialize subsystem
@@ -267,6 +270,19 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
             else if (CommandType == TEXT("create_input_mapping"))
             {
                 ResultJson = ProjectCommands->HandleCommand(CommandType, Params);
+            }
+            // Asset Commands (Sprint 1 — asset registry queries + asset mutations)
+            else if (CommandType == TEXT("list_assets") ||
+                     CommandType == TEXT("get_asset_info") ||
+                     CommandType == TEXT("find_assets_by_class") ||
+                     CommandType == TEXT("get_asset_dependencies") ||
+                     CommandType == TEXT("get_asset_references") ||
+                     CommandType == TEXT("move_asset") ||
+                     CommandType == TEXT("delete_asset") ||
+                     CommandType == TEXT("rename_asset") ||
+                     CommandType == TEXT("duplicate_asset"))
+            {
+                ResultJson = AssetCommands->HandleCommand(CommandType, Params);
             }
             // UMG Commands
             else if (CommandType == TEXT("create_umg_widget_blueprint") ||

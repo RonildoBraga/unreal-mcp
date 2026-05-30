@@ -6,165 +6,161 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.7%2B-orange)](https://www.unrealengine.com)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow)](https://www.python.org)
-[![Status](https://img.shields.io/badge/Status-Experimental-red)](https://github.com/RonildoBraga/unreal-mcp)
 
 </div>
 
-> **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. It adds:
+> **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. Adds:
 >
 > - **UE 5.7 compatibility patches** (`ANY_PACKAGE` removal in UE 5.5+, `BufferSize` name collision with `TCHAR_TO_UTF8` internals — see `CHANGELOG.md`)
-> - **Phase 5.3 UMG endpoint extensions** (~435 lines) for HUD-style widget work
-> - **Planned 50+ additional tools** across asset management, materials, Niagara, level management, performance profiling — see project roadmap
+> - **Phase 5.3 UMG endpoint extensions** for HUD-style widget work
+> - **Sprint 1 (v0.2.0 + v0.3.0):** asset management, editor state, level management — ~18 new tools
+> - **Planned ~14 more tools in Sprint 2** (asset import + migrate, materials, outliner) — see `CHANGELOG.md` roadmap
 >
-> Original upstream remains MIT-licensed; this fork preserves the license and attribution. For the unmodified original, go to [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp).
+> Original upstream remains MIT-licensed; this fork preserves the license and attribution.
 
-This project enables AI assistant clients like Cursor, Windsurf and Claude Desktop to control Unreal Engine through natural language using the Model Context Protocol (MCP).
+Drive Unreal Engine 5.7 from any Model Context Protocol (MCP) client — Claude Desktop, Claude Code, Cursor, Codex CLI, Windsurf, and others — via natural language. The system bridges your MCP client to a C++ plugin running inside the UE editor via a small Python server.
 
-## ⚠️ Experimental Status
-
-This project is currently in an **EXPERIMENTAL** state. The API, functionality, and implementation details are subject to significant changes. While we encourage testing and feedback, please be aware that:
-
-- Breaking changes may occur without notice
-- Features may be incomplete or unstable
-- Documentation may be outdated or missing
-- Production use is not recommended at this time
-
-## 🌟 Overview
-
-The Unreal MCP integration provides comprehensive tools for controlling Unreal Engine through natural language:
+## What it can do
 
 | Category | Capabilities |
 |----------|-------------|
-| **Actor Management** | • Create and delete actors (cubes, spheres, lights, cameras, etc.)<br>• Set actor transforms (position, rotation, scale)<br>• Query actor properties and find actors by name<br>• List all actors in the current level |
-| **Blueprint Development** | • Create new Blueprint classes with custom components<br>• Add and configure components (mesh, camera, light, etc.)<br>• Set component properties and physics settings<br>• Compile Blueprints and spawn Blueprint actors<br>• Create input mappings for player controls |
-| **Blueprint Node Graph** | • Add event nodes (BeginPlay, Tick, etc.)<br>• Create function call nodes and connect them<br>• Add variables with custom types and default values<br>• Create component and self references<br>• Find and manage nodes in the graph |
-| **Editor Control** | • Focus viewport on specific actors or locations<br>• Control viewport camera orientation and distance |
+| **Actors** | Create, delete, set transforms, query properties, find/list actors |
+| **Blueprints** | Create classes with custom components; add nodes; compile; spawn instances |
+| **UMG widgets** | Create widget BPs; add text/buttons/progress bars; bind events; viewport |
+| **Editor state** | Viewport camera read/write; screenshots; console commands; CVars |
+| **Levels** | Get/open/save current level; save all dirty |
+| **Assets** | List, search by class, dependency + referencer graph; move, delete, rename, duplicate |
+| **Input** | Input action mapping creation |
 
-All these capabilities are accessible through natural language commands via AI assistants, making it easy to automate and control Unreal Engine workflows.
+See `docs/tools/README.md` for the full v0.3.0 tool catalog (~54 tools).
 
-## 🧩 Components
+## Layout
 
-### Sample Project (MCPGameProject) `MCPGameProject`
-- Based off the Blank Project, but with the UnrealMCP plugin added.
+```
+unreal-mcp/
+├── plugin/           ★ THE UE PLUGIN — drop into any UE 5.7+ project's Plugins/
+├── server/           ★ THE PYTHON MCP SERVER — launched by your MCP client
+├── sample/           minimal UE 5.7 dev/test project (plugin junctioned in)
+├── docs/             architecture, install, per-tool reference
+├── tests/            integration tests
+├── examples/         MCP client configs + sample workflows
+└── scripts/          setup-dev-junction.ps1
+```
 
-### Plugin (UnrealMCP) `MCPGameProject/Plugins/UnrealMCP`
-- Native TCP server for MCP communication
-- Integrates with Unreal Editor subsystems
-- Implements actor manipulation tools
-- Handles command execution and response handling
+Full layout in `CONTRIBUTING.md`. Architecture diagram in `docs/architecture.md`.
 
-### Python MCP Server `Python/unreal_mcp_server.py`
-- Implemented in `unreal_mcp_server.py`
-- Manages TCP socket connections to the C++ plugin (port 55557)
-- Handles command serialization and response parsing
-- Provides error handling and connection management
-- Loads and registers tool modules from the `tools` directory
-- Uses the FastMCP library to implement the Model Context Protocol
-
-## 📂 Directory Structure
-
-- **`plugin/`** — ★ THE UE PLUGIN. Drops into any UE 5.7+ project's `Plugins/`.
-  - `UnrealMCP.uplugin` — plugin descriptor
-  - `Source/UnrealMCP/` — C++ source (handlers in `Private/Commands/`)
-- **`server/`** — ★ THE PYTHON MCP SERVER. Launched by your MCP client.
-  - `unreal_mcp_server.py` — FastMCP server entry point
-  - `tools/` — one Python module per tool category (asset, editor, level, blueprint, …)
-- **`sample/`** — minimal UE 5.7 project for plugin dev/test (see `docs/installing.md`)
-- **`docs/`** — architecture, installation, per-tool reference
-- **`tests/`** — integration tests (populated in Sprint 2+)
-- **`examples/`** — example MCP client config + sample workflows
-- **`scripts/`** — developer convenience (junction setup)
-
-Full layout in `CONTRIBUTING.md`. Architecture explained in `docs/architecture.md`.
-
-## 🚀 Quick Start Guide
+## Quick start
 
 ### Prerequisites
+
 - Unreal Engine 5.7+
 - Python 3.12+
-- MCP Client (e.g., Claude Desktop, Claude Code, Cursor, Windsurf)
+- [`uv`](https://docs.astral.sh/uv/) (`pip install uv` or via your package manager)
+- An MCP client (see configuration section below)
 
-### Installing into your existing project
+### 1. Install the plugin into your UE project
 
-1. **Drop the plugin into your project's `Plugins/`** — copy the `plugin/`
-   directory of this repo (or extract a release zip) so you end up with:
-   ```
-   YourProject/Plugins/UnrealMCP/
-   ├── UnrealMCP.uplugin
-   └── Source/UnrealMCP/
-   ```
-2. **Set up the Python server.** Clone or download the `server/` directory
-   to a known location, install its deps:
-   ```
-   cd server
-   uv venv
-   uv pip install -e .
-   ```
-3. **Register the server with your MCP client.** See
-   `examples/mcp-client-config.json` for the exact JSON. Place it at your
-   client's MCP-config location (table further down).
-4. **Open your UE project.** The plugin's TCP server starts automatically
-   on port 55557 once the editor is loaded. Restart your MCP client to pick
-   up the new tools.
+Copy the `plugin/` directory of this repo (or extract a release zip) into your project's `Plugins/` folder so you end up with:
 
-Full walk-through (including the contributor dev-junction setup) in
-`docs/installing.md`.
-
-### Hacking on the plugin itself
-
-If you're modifying the plugin source, work in this repo:
 ```
-git clone https://github.com/RonildoBraga/unreal-mcp.git
-cd unreal-mcp
-.\scripts\setup-dev-junction.ps1     # creates sample/Plugins/UnrealMCP junction
+YourProject/Plugins/UnrealMCP/
+├── UnrealMCP.uplugin
+└── Source/UnrealMCP/
 ```
-Then open `sample/UnrealMCPSample.uproject` in UE 5.7. Edits to `plugin/Source/`
-are immediately visible to the sample's build. See `docs/installing.md` for
-why this works.
 
-### Python Server Setup
+On next editor open, the plugin's TCP server starts automatically on port 55557.
 
-See `server/README.md` for venv setup and run instructions.
+### 2. Install the Python server
 
-### Configuring your MCP Client
+```bash
+cd server
+uv venv
+uv pip install -e .
+```
 
-Use the following JSON for your mcp configuration based on your MCP client.
+### 3. Configure your MCP client
+
+Pick your client below and add the entry to its config file. The schema is the same across clients — only the file location and format differ.
+
+#### Claude Desktop
+
+Config file: `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS).
 
 ```json
 {
   "mcpServers": {
-    "unrealMCP": {
+    "unreal-mcp": {
       "command": "uv",
       "args": [
-        "--directory",
-        "<path/to/the/folder/PYTHON>",
-        "run",
-        "unreal_mcp_server.py"
+        "--directory", "/absolute/path/to/unreal-mcp/server",
+        "run", "unreal_mcp_server.py"
       ]
     }
   }
 }
 ```
 
-A full example is at `examples/mcp-client-config.json`.
+#### Claude Code (CLI)
 
-### MCP Configuration Locations
+Config file: `~/.claude.json` (top-level, contains an `mcpServers` object).
 
-Depending on which MCP client you're using, the configuration file location will differ:
+```json
+{
+  "mcpServers": {
+    "unreal-mcp": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory", "/absolute/path/to/unreal-mcp/server",
+        "run", "unreal_mcp_server.py"
+      ]
+    }
+  }
+}
+```
 
-| MCP Client | Configuration File Location | Notes |
-|------------|------------------------------|-------|
-| Claude Desktop | `~/.config/claude-desktop/mcp.json` | On Windows: `%USERPROFILE%\.config\claude-desktop\mcp.json` |
-| Cursor | `.cursor/mcp.json` | Located in your project root directory |
-| Windsurf | `~/.config/windsurf/mcp.json` | On Windows: `%USERPROFILE%\.config\windsurf\mcp.json` |
+#### Codex CLI (OpenAI)
 
-Each client uses the same JSON format as shown in the example above. 
-Simply place the configuration in the appropriate location for your MCP client.
+Config file: `~/.codex/config.toml`.
 
+```toml
+[mcp_servers.unreal-mcp]
+command = "uv"
+args = ["--directory", "/absolute/path/to/unreal-mcp/server", "run", "unreal_mcp_server.py"]
+```
+
+#### Cursor
+
+Config file: `.cursor/mcp.json` (project root) or `~/.cursor/mcp.json` (user-level).
+
+Same JSON shape as Claude Desktop.
+
+#### Windsurf
+
+Config file: `~/.codeium/windsurf/mcp_config.json`.
+
+Same JSON shape as Claude Desktop.
+
+### 4. Open your UE project
+
+The plugin's TCP server starts when the editor loads. **Restart your MCP client** so it picks up the newly-configured server and discovers the available tools.
+
+A working example config is at `examples/mcp-client-config.json`.
+
+## Working on the plugin source (contributors)
+
+If you're modifying the plugin itself:
+
+```bash
+git clone https://github.com/RonildoBraga/unreal-mcp.git
+cd unreal-mcp
+.\scripts\setup-dev-junction.ps1     # creates sample/Plugins/UnrealMCP junction
+```
+
+Open `sample/UnrealMCPSample.uproject` in UE 5.7. Edits to `plugin/Source/` are immediately visible to the sample's build via the Windows junction.
+
+For style conventions when adding new tools, see `CONTRIBUTING.md`. Architecture explained in `docs/architecture.md`.
 
 ## License
-MIT
 
-## Questions
-
-For questions, you can reach me on X/Twitter: [@chongdashu](https://www.x.com/chongdashu)
+MIT. See `LICENSE`. Attribution to upstream `chongdashu/unreal-mcp` preserved.

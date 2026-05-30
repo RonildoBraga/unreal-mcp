@@ -366,4 +366,172 @@ def register_editor_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─── Sprint 1 — editor state extensions ─────────────────────────────────
+
+    @mcp.tool()
+    def take_screenshot(ctx: Context, filename: str = "screenshot.png", show_ui: bool = False) -> Dict[str, Any]:
+        """Capture a screenshot of the active editor viewport to a file.
+
+        Args:
+            filename: Output filename. Relative paths land under <Project>/Saved/.
+                      Default "screenshot.png".
+            show_ui:  Include editor UI gizmos in the capture (sprites, grids,
+                      selection outlines). Default False — cleaner screenshots
+                      better for visual evaluation.
+
+        Returns:
+            {"filepath": "...absolute path..."}  on success.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("take_screenshot", {"filename": filename, "show_ui": show_ui}) or {}
+        except Exception as e:
+            logger.error(f"take_screenshot error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_viewport_camera(ctx: Context) -> Dict[str, Any]:
+        """Read the current editor viewport camera location and rotation.
+
+        Returns:
+            {
+              "location": {"x": float, "y": float, "z": float},   # cm, UE world space
+              "rotation": {"pitch": float, "yaw": float, "roll": float}  # degrees
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("get_viewport_camera", {})
+            if response and "result" in response:
+                return response["result"]
+            return response or {"error": "no response"}
+        except Exception as e:
+            logger.error(f"get_viewport_camera error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def set_viewport_camera(ctx: Context, location: List[float], rotation: List[float]) -> Dict[str, Any]:
+        """Move the editor viewport camera to a specific pose.
+
+        Args:
+            location: [x, y, z] in UE world units (cm). UE is Z-up, left-handed.
+            rotation: [pitch, yaw, roll] in degrees. Pitch negative looks down.
+
+        Useful for setting up consistent screenshot vantages — e.g. matching
+        Lauder's gameplay camera angle (~55° pitch down) when evaluating
+        scene mockups in the editor.
+
+        Returns: {"success": True} on success.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("set_viewport_camera", {
+                "location": location,
+                "rotation": rotation,
+            })
+            if response and "result" in response:
+                return response["result"]
+            return response or {"error": "no response"}
+        except Exception as e:
+            logger.error(f"set_viewport_camera error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def execute_console_command(ctx: Context, command: str) -> Dict[str, Any]:
+        """Execute an arbitrary UE console command against the editor world.
+
+        Common uses:
+            "stat fps"                  show FPS overlay
+            "HighResShot 1920x1080"     take a high-res screenshot
+            "showflag.Sprites 0"        hide editor gizmos
+            "r.Lumen.Reflections 0"     toggle a CVar via console syntax
+
+        For CVar set/get specifically, prefer the typed `set_cvar` / `get_cvar`
+        tools — they parse the value as the right type.
+
+        Args:
+            command: Full console command string.
+
+        Returns: {"command": "...", "success": bool}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("execute_console_command", {"command": command})
+            if response and "result" in response:
+                return response["result"]
+            return response or {"error": "no response"}
+        except Exception as e:
+            logger.error(f"execute_console_command error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def set_cvar(ctx: Context, name: str, value: str) -> Dict[str, Any]:
+        """Set a UE console variable (CVar) to a specific value.
+
+        CVars control engine behavior at runtime. Examples relevant to
+        Lauder Phase 7 evaluation:
+            r.RayTracing.SkyLight.MaxRayDistance   100000
+            r.Lumen.Reflections                    1
+            r.SSGI.Quality                         1
+
+        Args:
+            name:  CVar name (e.g. "r.Lumen.Reflections").
+            value: New value as a string. Numeric values accepted as strings.
+
+        Returns:
+            {"name": "...", "value": "...", "current_value": "...", "success": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("set_cvar", {"name": name, "value": value})
+            if response and "result" in response:
+                return response["result"]
+            return response or {"error": "no response"}
+        except Exception as e:
+            logger.error(f"set_cvar error: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_cvar(ctx: Context, name: str) -> Dict[str, Any]:
+        """Read the current value of a UE console variable.
+
+        Args:
+            name: CVar name.
+
+        Returns:
+            {
+              "name": "...", "value": "<string>",
+              "float_value": float, "int_value": int, "bool_value": bool
+            }
+            The typed variants are convenience accessors so callers don't
+            have to parse the string.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("get_cvar", {"name": name})
+            if response and "result" in response:
+                return response["result"]
+            return response or {"error": "no response"}
+        except Exception as e:
+            logger.error(f"get_cvar error: {e}")
+            return {"error": str(e)}
+
     logger.info("Editor tools registered successfully")

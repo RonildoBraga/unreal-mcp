@@ -272,6 +272,7 @@ from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.umg_tools import register_umg_tools
 from tools.asset_tools import register_asset_tools
+from tools.level_tools import register_level_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -280,6 +281,7 @@ register_blueprint_node_tools(mcp)
 register_project_tools(mcp)
 register_umg_tools(mcp)
 register_asset_tools(mcp)
+register_level_tools(mcp)
 
 @mcp.prompt()
 def info():

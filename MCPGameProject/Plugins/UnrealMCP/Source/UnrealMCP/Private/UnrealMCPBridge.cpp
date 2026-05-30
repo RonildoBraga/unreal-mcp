@@ -58,6 +58,7 @@
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Commands/UnrealMCPUMGCommands.h"
 #include "Commands/UnrealMCPAssetCommands.h"
+#include "Commands/UnrealMCPLevelCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -71,6 +72,7 @@ UUnrealMCPBridge::UUnrealMCPBridge()
     ProjectCommands = MakeShared<FUnrealMCPProjectCommands>();
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
     AssetCommands = MakeShared<FUnrealMCPAssetCommands>();
+    LevelCommands = MakeShared<FUnrealMCPLevelCommands>();
 }
 
 UUnrealMCPBridge::~UUnrealMCPBridge()
@@ -81,6 +83,7 @@ UUnrealMCPBridge::~UUnrealMCPBridge()
     ProjectCommands.Reset();
     UMGCommands.Reset();
     AssetCommands.Reset();
+    LevelCommands.Reset();
 }
 
 // Initialize subsystem
@@ -226,18 +229,23 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                 ResultJson = MakeShareable(new FJsonObject);
                 ResultJson->SetStringField(TEXT("message"), TEXT("pong"));
             }
-            // Editor Commands (including actor manipulation)
-            else if (CommandType == TEXT("get_actors_in_level") || 
+            // Editor Commands (including actor manipulation + Sprint 1 state ext.)
+            else if (CommandType == TEXT("get_actors_in_level") ||
                      CommandType == TEXT("find_actors_by_name") ||
                      CommandType == TEXT("spawn_actor") ||
                      CommandType == TEXT("create_actor") ||
-                     CommandType == TEXT("delete_actor") || 
+                     CommandType == TEXT("delete_actor") ||
                      CommandType == TEXT("set_actor_transform") ||
                      CommandType == TEXT("get_actor_properties") ||
                      CommandType == TEXT("set_actor_property") ||
                      CommandType == TEXT("spawn_blueprint_actor") ||
-                     CommandType == TEXT("focus_viewport") || 
-                     CommandType == TEXT("take_screenshot"))
+                     CommandType == TEXT("focus_viewport") ||
+                     CommandType == TEXT("take_screenshot") ||
+                     CommandType == TEXT("get_viewport_camera") ||
+                     CommandType == TEXT("set_viewport_camera") ||
+                     CommandType == TEXT("execute_console_command") ||
+                     CommandType == TEXT("set_cvar") ||
+                     CommandType == TEXT("get_cvar"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
@@ -283,6 +291,14 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("duplicate_asset"))
             {
                 ResultJson = AssetCommands->HandleCommand(CommandType, Params);
+            }
+            // Level Commands (Sprint 1 partial — basic level lifecycle)
+            else if (CommandType == TEXT("get_current_level") ||
+                     CommandType == TEXT("open_level") ||
+                     CommandType == TEXT("save_current_level") ||
+                     CommandType == TEXT("save_all_dirty"))
+            {
+                ResultJson = LevelCommands->HandleCommand(CommandType, Params);
             }
             // UMG Commands
             else if (CommandType == TEXT("create_umg_widget_blueprint") ||

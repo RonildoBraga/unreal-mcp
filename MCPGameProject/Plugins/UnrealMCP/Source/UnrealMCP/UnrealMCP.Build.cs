@@ -44,6 +44,7 @@ public class UnrealMCP : ModuleRules
 				"UnrealEd",
 				"EditorScriptingUtilities",
 				"EditorSubsystem",
+				"LevelEditor",     // Sprint 1: ULevelEditorSubsystem (open/save level tools)
 				"Slate",
 				"SlateCore",
 				"UMG",

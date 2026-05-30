@@ -6,14 +6,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), 
 
 ## [Unreleased]
 
-Sprint 1 of the roadmap is in progress. Done so far:
+Sprint 2 planning (see Lauder project roadmap):
 
-- **Asset management category (9 tools, shipped 2026-05-29)** — see entry below.
+- **Asset import + migrate (~5 tools)** — `import_fbx`, `import_texture`, `import_audio`, `migrate_assets_from_project`, `cook_for_migration`. The migrate tool unblocks Phase 7.2/7.3 — cross-project asset moves from sample projects into Lauder.
+- **Materials category (~5 tools)** — `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`.
+- **Outliner / organization (~4 tools)** — `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`.
 
-Still planned for Sprint 1:
+Deferred to Sprint 2 from Sprint 1:
 
-- **Editor state extensions (~5 tools)** — wire `take_screenshot` to Python side (already in C++), `get_viewport_camera`, `set_viewport_camera`, `execute_console_command`, `set_cvar`. Will also fix the pre-existing deprecation warning on `FImageUtils::CompressImageArray` in `UnrealMCPEditorCommands.cpp:588` (upstream issue surfacing only as a UE 5.7 warning today, hard error in the next release).
-- **Level management partial (~4 tools)** — `get_current_level`, `open_level`, `save_level`, `save_all_dirty`.
+- **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7 deprecates `FImageUtils::CompressImageArray` in favor of `PNGCompressImageArray`, but the new API uses `TArrayView64<const FColor>` + `TArray64<uint8>`, which requires rewriting the surrounding `ReadPixels` path. The deprecation only emits a warning today (hard error in a future release) so it's safe to defer.
 - **Level management category (~9 tools)** — `get_current_level`, `open_level`, `save_level`, `save_all_dirty`, `create_level`, `list_levels_in_project`, `check_map_errors`, `build_lighting`, `add_streaming_sublevel`
 - **Asset import / migrate (~5 tools)** — `import_fbx`, `import_texture`, `import_audio`, `migrate_assets_from_project`, `cook_for_migration`
 - **Materials category (~5 tools)** — `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`
@@ -21,6 +22,48 @@ Still planned for Sprint 1:
 - **Performance profiling (~5 tools)** — `get_frame_stats`, `get_gpu_stats`, `start_stat_capture`, `stop_stat_capture`, `dump_memory_usage`
 - **Outliner / organization (~4 tools)** — `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
 - **Blueprint introspection extensions (~4 tools)** — `get_blueprint_graph_json`, `get_blueprint_variables`, `get_blueprint_functions`, `find_blueprint_compile_errors`
+
+## [0.3.0] — 2026-05-30 — Sprint 1 completion: editor state + level management + cleanup
+
+### Added — Editor State extensions (5 tools)
+
+Extended `FUnrealMCPEditorCommands` with viewport + console-variable handlers:
+
+- **`take_screenshot(filename="screenshot.png", show_ui=False)`** — Python wrapper for the existing C++ `HandleTakeScreenshot`. Previously only callable via raw `execute_command`; now first-class.
+- **`get_viewport_camera()`** — returns the editor viewport camera's location (`{x,y,z}`) and rotation (`{pitch,yaw,roll}`). Reads `UUnrealEditorSubsystem::GetLevelViewportCameraInfo`.
+- **`set_viewport_camera(location, rotation)`** — moves the viewport camera. Accepts either object form (`{x,y,z}` / `{pitch,yaw,roll}`) or flat array form (`[x,y,z]` / `[p,y,r]`).
+- **`execute_console_command(command)`** — runs an arbitrary UE console command (e.g. `"stat fps"`, `"HighResShot 1920x1080"`).
+- **`set_cvar(name, value)`** and **`get_cvar(name)`** — typed CVar access via `IConsoleManager`. The getter returns string + float + int + bool variants so callers don't parse.
+
+### Added — Level Management partial (4 tools)
+
+New command handler class `FUnrealMCPLevelCommands` at
+`MCPGameProject/Plugins/UnrealMCP/Source/UnrealMCP/Private/Commands/UnrealMCPLevelCommands.cpp`
+(+ header in `Public/Commands/`). Wired into `UUnrealMCPBridge` dispatch.
+
+- **`get_current_level()`** — name + package_name + object_path + map_name of the loaded editor world.
+- **`open_level(level_path)`** — load a level by `/Game/`-prefixed package path. Accepts either package-path or object-path form (auto-strips trailing object suffix).
+- **`save_current_level()`** — save the currently-loaded level.
+- **`save_all_dirty()`** — batch-save every dirty level + content package.
+
+Uses `ULevelEditorSubsystem` from the `LevelEditor` module.
+
+### Changed — Build system
+
+Added `"LevelEditor"` to `PrivateDependencyModuleNames` in `UnrealMCP.Build.cs` so the
+plugin can link against `ULevelEditorSubsystem`. Required by the level management tools.
+
+### Removed — stale upstream cruft (separate commit 1f574d6)
+
+- `.cursor/rules/`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md` — IDE-specific rule files carrying duplicated content for Cursor/Windsurf/Cline/Copilot users. Consolidated into a single `Docs/CONTRIBUTING.md` with our style guide additions.
+- `MCPGameProject/Docs/REFACTOR_COMMANDS.md` — historical refactoring plan; the refactor it described has been done since before our fork.
+- Net: 411 lines removed, 138 added (CONTRIBUTING.md), -270 net.
+
+### Verified
+
+Builds clean against UE 5.7 in LauderEditor target. One MSVC warning silenced
+(false-positive uninit on `FRotator` in `HandleSetViewportCamera`; locals now
+explicitly initialized to `ZeroRotator`/`ZeroVector`).
 
 ## [0.2.0] — 2026-05-29 — Sprint 1: Asset Management
 

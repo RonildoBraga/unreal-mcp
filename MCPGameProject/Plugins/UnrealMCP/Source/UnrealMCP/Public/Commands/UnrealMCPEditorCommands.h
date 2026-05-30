@@ -31,4 +31,11 @@ private:
     // Editor viewport commands
     TSharedPtr<FJsonObject> HandleFocusViewport(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleTakeScreenshot(const TSharedPtr<FJsonObject>& Params);
-}; 
+
+    // Editor state extensions (Sprint 1)
+    TSharedPtr<FJsonObject> HandleGetViewportCamera(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetViewportCamera(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleExecuteConsoleCommand(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetCVar(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetCVar(const TSharedPtr<FJsonObject>& Params);
+};

@@ -18,6 +18,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "EditorSubsystem.h"
 #include "Subsystems/EditorActorSubsystem.h"
+#include "Subsystems/UnrealEditorSubsystem.h"
+#include "HAL/IConsoleManager.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 
@@ -74,7 +76,28 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandleTakeScreenshot(Params);
     }
-    
+    // Editor state extensions (Sprint 1)
+    else if (CommandType == TEXT("get_viewport_camera"))
+    {
+        return HandleGetViewportCamera(Params);
+    }
+    else if (CommandType == TEXT("set_viewport_camera"))
+    {
+        return HandleSetViewportCamera(Params);
+    }
+    else if (CommandType == TEXT("execute_console_command"))
+    {
+        return HandleExecuteConsoleCommand(Params);
+    }
+    else if (CommandType == TEXT("set_cvar"))
+    {
+        return HandleSetCVar(Params);
+    }
+    else if (CommandType == TEXT("get_cvar"))
+    {
+        return HandleGetCVar(Params);
+    }
+
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
 
@@ -585,6 +608,11 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleTakeScreenshot(const TSh
         if (Viewport->ReadPixels(Bitmap, FReadSurfaceDataFlags(), ViewportRect))
         {
             TArray<uint8> CompressedBitmap;
+            // UE 5.7 deprecates CompressImageArray in favor of PNGCompressImageArray, but the
+            // new API requires TArrayView64<const FColor> + TArray64<uint8> — switching the
+            // surrounding ReadPixels path to 64-bit arrays is non-trivial and gets clean
+            // treatment in Sprint 2 when we rewrite screenshot via FImageView/FImageBuilder.
+            // For now: eat the deprecation warning, keep the working code.
             FImageUtils::CompressImageArray(Viewport->GetSizeXY().X, Viewport->GetSizeXY().Y, Bitmap, CompressedBitmap);
             
             if (FFileHelper::SaveArrayToFile(CompressedBitmap, *FilePath))
@@ -597,4 +625,192 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleTakeScreenshot(const TSh
     }
     
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to take screenshot"));
+}
+
+
+// ─── Editor state extensions (Sprint 1) ──────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetViewportCamera(const TSharedPtr<FJsonObject>& Params)
+{
+    UUnrealEditorSubsystem* EditorSub = GEditor ? GEditor->GetEditorSubsystem<UUnrealEditorSubsystem>() : nullptr;
+    if (!EditorSub)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("UnrealEditorSubsystem unavailable"));
+    }
+
+    FVector Location;
+    FRotator Rotation;
+    EditorSub->GetLevelViewportCameraInfo(Location, Rotation);
+
+    TSharedPtr<FJsonObject> LocObj = MakeShared<FJsonObject>();
+    LocObj->SetNumberField(TEXT("x"), Location.X);
+    LocObj->SetNumberField(TEXT("y"), Location.Y);
+    LocObj->SetNumberField(TEXT("z"), Location.Z);
+
+    TSharedPtr<FJsonObject> RotObj = MakeShared<FJsonObject>();
+    RotObj->SetNumberField(TEXT("pitch"), Rotation.Pitch);
+    RotObj->SetNumberField(TEXT("yaw"),   Rotation.Yaw);
+    RotObj->SetNumberField(TEXT("roll"),  Rotation.Roll);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetObjectField(TEXT("location"), LocObj);
+    Result->SetObjectField(TEXT("rotation"), RotObj);
+    return Result;
+}
+
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetViewportCamera(const TSharedPtr<FJsonObject>& Params)
+{
+    UUnrealEditorSubsystem* EditorSub = GEditor ? GEditor->GetEditorSubsystem<UUnrealEditorSubsystem>() : nullptr;
+    if (!EditorSub)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("UnrealEditorSubsystem unavailable"));
+    }
+
+    // Accepts either a {location:{x,y,z}, rotation:{pitch,yaw,roll}} object form
+    // or flat arrays as a convenience: location: [x,y,z], rotation: [p,y,r].
+    auto ReadVector = [](const TSharedPtr<FJsonObject>& Parent, const FString& Field, FVector& Out) -> bool
+    {
+        const TSharedPtr<FJsonObject>* AsObj = nullptr;
+        if (Parent->TryGetObjectField(Field, AsObj))
+        {
+            Out.X = (*AsObj)->GetNumberField(TEXT("x"));
+            Out.Y = (*AsObj)->GetNumberField(TEXT("y"));
+            Out.Z = (*AsObj)->GetNumberField(TEXT("z"));
+            return true;
+        }
+        const TArray<TSharedPtr<FJsonValue>>* AsArr = nullptr;
+        if (Parent->TryGetArrayField(Field, AsArr) && AsArr->Num() == 3)
+        {
+            Out.X = (*AsArr)[0]->AsNumber();
+            Out.Y = (*AsArr)[1]->AsNumber();
+            Out.Z = (*AsArr)[2]->AsNumber();
+            return true;
+        }
+        return false;
+    };
+
+    auto ReadRotator = [](const TSharedPtr<FJsonObject>& Parent, const FString& Field, FRotator& Out) -> bool
+    {
+        const TSharedPtr<FJsonObject>* AsObj = nullptr;
+        if (Parent->TryGetObjectField(Field, AsObj))
+        {
+            Out.Pitch = (*AsObj)->GetNumberField(TEXT("pitch"));
+            Out.Yaw   = (*AsObj)->GetNumberField(TEXT("yaw"));
+            Out.Roll  = (*AsObj)->GetNumberField(TEXT("roll"));
+            return true;
+        }
+        const TArray<TSharedPtr<FJsonValue>>* AsArr = nullptr;
+        if (Parent->TryGetArrayField(Field, AsArr) && AsArr->Num() == 3)
+        {
+            Out.Pitch = (*AsArr)[0]->AsNumber();
+            Out.Yaw   = (*AsArr)[1]->AsNumber();
+            Out.Roll  = (*AsArr)[2]->AsNumber();
+            return true;
+        }
+        return false;
+    };
+
+    FVector Location = FVector::ZeroVector;
+    FRotator Rotation = FRotator::ZeroRotator;
+    if (!ReadVector(Params, TEXT("location"), Location) || !ReadRotator(Params, TEXT("rotation"), Rotation))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Need 'location' (Vector) and 'rotation' (Rotator). "
+                 "Accept either {x,y,z}/{pitch,yaw,roll} objects or 3-element arrays."));
+    }
+
+    EditorSub->SetLevelViewportCameraInfo(Location, Rotation);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleExecuteConsoleCommand(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Command;
+    if (!Params->TryGetStringField(TEXT("command"), Command) || Command.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing required 'command' parameter"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World || !GEngine)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world / engine to execute against"));
+    }
+
+    const bool bSuccess = GEngine->Exec(World, *Command);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("command"), Command);
+    Result->SetBoolField(TEXT("success"), bSuccess);
+    return Result;
+}
+
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetCVar(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Name, Value;
+    if (!Params->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing required 'name' parameter"));
+    }
+    if (!Params->TryGetStringField(TEXT("value"), Value))
+    {
+        // Allow numeric values to come through as numbers
+        double NumValue = 0.0;
+        if (Params->TryGetNumberField(TEXT("value"), NumValue))
+        {
+            Value = FString::SanitizeFloat(NumValue);
+        }
+        else
+        {
+            return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing required 'value' parameter"));
+        }
+    }
+
+    IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(*Name);
+    if (!CVar)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("CVar not found: %s"), *Name));
+    }
+
+    CVar->Set(*Value, ECVF_SetByConsole);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), Name);
+    Result->SetStringField(TEXT("value"), Value);
+    Result->SetStringField(TEXT("current_value"), CVar->GetString());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetCVar(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Name;
+    if (!Params->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing required 'name' parameter"));
+    }
+
+    IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(*Name);
+    if (!CVar)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("CVar not found: %s"), *Name));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), Name);
+    Result->SetStringField(TEXT("value"), CVar->GetString());
+    // Expose the typed variants so callers can use them without parsing
+    Result->SetNumberField(TEXT("float_value"), CVar->GetFloat());
+    Result->SetNumberField(TEXT("int_value"), CVar->GetInt());
+    Result->SetBoolField(TEXT("bool_value"), CVar->GetBool());
+    return Result;
 } 

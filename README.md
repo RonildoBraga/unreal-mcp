@@ -63,61 +63,68 @@ All these capabilities are accessible through natural language commands via AI a
 
 ## 📂 Directory Structure
 
-- **MCPGameProject/** - Example Unreal project
-  - **Plugins/UnrealMCP/** - C++ plugin source
-    - **Source/UnrealMCP/** - Plugin source code
-    - **UnrealMCP.uplugin** - Plugin definition
+- **`plugin/`** — ★ THE UE PLUGIN. Drops into any UE 5.7+ project's `Plugins/`.
+  - `UnrealMCP.uplugin` — plugin descriptor
+  - `Source/UnrealMCP/` — C++ source (handlers in `Private/Commands/`)
+- **`server/`** — ★ THE PYTHON MCP SERVER. Launched by your MCP client.
+  - `unreal_mcp_server.py` — FastMCP server entry point
+  - `tools/` — one Python module per tool category (asset, editor, level, blueprint, …)
+- **`sample/`** — minimal UE 5.7 project for plugin dev/test (see `docs/installing.md`)
+- **`docs/`** — architecture, installation, per-tool reference
+- **`tests/`** — integration tests (populated in Sprint 2+)
+- **`examples/`** — example MCP client config + sample workflows
+- **`scripts/`** — developer convenience (junction setup)
 
-- **Python/** - Python server and tools
-  - **tools/** - Tool modules for actor, editor, and blueprint operations
-  - **scripts/** - Example scripts and demos
-
-- **Docs/** - Comprehensive documentation
-  - See [Docs/README.md](Docs/README.md) for documentation index
+Full layout in `CONTRIBUTING.md`. Architecture explained in `docs/architecture.md`.
 
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
-- Unreal Engine 5.5+
+- Unreal Engine 5.7+
 - Python 3.12+
-- MCP Client (e.g., Claude Desktop, Cursor, Windsurf)
+- MCP Client (e.g., Claude Desktop, Claude Code, Cursor, Windsurf)
 
-### Sample project
+### Installing into your existing project
 
-For getting started quickly, feel free to use the starter project in `MCPGameProject`. This is a UE 5.5 Blank Starter Project with the `UnrealMCP.uplugin` already configured. 
+1. **Drop the plugin into your project's `Plugins/`** — copy the `plugin/`
+   directory of this repo (or extract a release zip) so you end up with:
+   ```
+   YourProject/Plugins/UnrealMCP/
+   ├── UnrealMCP.uplugin
+   └── Source/UnrealMCP/
+   ```
+2. **Set up the Python server.** Clone or download the `server/` directory
+   to a known location, install its deps:
+   ```
+   cd server
+   uv venv
+   uv pip install -e .
+   ```
+3. **Register the server with your MCP client.** See
+   `examples/mcp-client-config.json` for the exact JSON. Place it at your
+   client's MCP-config location (table further down).
+4. **Open your UE project.** The plugin's TCP server starts automatically
+   on port 55557 once the editor is loaded. Restart your MCP client to pick
+   up the new tools.
 
-1. **Prepare the project**
-   - Right-click your .uproject file
-   - Generate Visual Studio project files
-2. **Build the project (including the plugin)**
-   - Open solution (`.sln`)
-   - Choose `Development Editor` as your target.
-   - Build
+Full walk-through (including the contributor dev-junction setup) in
+`docs/installing.md`.
 
-### Plugin
-Otherwise, if you want to use the plugin in your existing project:
+### Hacking on the plugin itself
 
-1. **Copy the plugin to your project**
-   - Copy `MCPGameProject/Plugins/UnrealMCP` to your project's Plugins folder
-
-2. **Enable the plugin**
-   - Edit > Plugins
-   - Find "UnrealMCP" in Editor category
-   - Enable the plugin
-   - Restart editor when prompted
-
-3. **Build the plugin**
-   - Right-click your .uproject file
-   - Generate Visual Studio project files
-   - Open solution (`.sln)
-   - Build with your target platform and output settings
+If you're modifying the plugin source, work in this repo:
+```
+git clone https://github.com/RonildoBraga/unreal-mcp.git
+cd unreal-mcp
+.\scripts\setup-dev-junction.ps1     # creates sample/Plugins/UnrealMCP junction
+```
+Then open `sample/UnrealMCPSample.uproject` in UE 5.7. Edits to `plugin/Source/`
+are immediately visible to the sample's build. See `docs/installing.md` for
+why this works.
 
 ### Python Server Setup
 
-See [Python/README.md](Python/README.md) for detailed Python setup instructions, including:
-- Setting up your Python environment
-- Running the MCP server
-- Using direct or server-based connections
+See `server/README.md` for venv setup and run instructions.
 
 ### Configuring your MCP Client
 
@@ -139,7 +146,7 @@ Use the following JSON for your mcp configuration based on your MCP client.
 }
 ```
 
-An example is found in `mcp.json`
+A full example is at `examples/mcp-client-config.json`.
 
 ### MCP Configuration Locations
 

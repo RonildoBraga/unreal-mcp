@@ -1,0 +1,3 @@
+# This directory is populated at dev time by scripts/setup-dev-junction.ps1,
+# which creates sample/Plugins/UnrealMCP as a junction → ../../plugin/.
+# Keep this .gitkeep so the directory exists in git.

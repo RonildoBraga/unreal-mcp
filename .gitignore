@@ -1,5 +1,9 @@
-# Unreal MCP
-Python/unreal_mcp.log
+# Unreal MCP — server logs
+server/unreal_mcp.log
+
+# Dev junction at sample/Plugins/UnrealMCP created by scripts/setup-dev-junction.ps1
+# (the file is .gitkeep so the directory survives in git; junction target ignored)
+sample/Plugins/UnrealMCP/
 
 # AI-related files (IDE-specific rule files consolidated into Docs/CONTRIBUTING.md 2026-05-30)
 .cursor/

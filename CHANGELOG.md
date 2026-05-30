@@ -23,6 +23,84 @@ Deferred to Sprint 2 from Sprint 1:
 - **Outliner / organization (~4 tools)** — `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
 - **Blueprint introspection extensions (~4 tools)** — `get_blueprint_graph_json`, `get_blueprint_variables`, `get_blueprint_functions`, `find_blueprint_compile_errors`
 
+## [0.4.0] — 2026-05-30 — Repo restructure for clarity
+
+Pre-Sprint-2 hygiene pass. Restructured the repo layout from the inherited
+upstream "UE project containing the plugin at depth 4" pattern into a clean
+three-product layout: `plugin/`, `server/`, `sample/`.
+
+### Restructured — top-level layout
+
+The plugin is now the **first thing a visitor sees**, not buried four levels
+deep inside a sample UE project. The Python server got the matching prominent
+sibling treatment.
+
+**Before:**
+```
+MCPGameProject/Plugins/UnrealMCP/Source/UnrealMCP/...  (the plugin, 4 levels deep)
+Python/tools/                                           (the server, generic name)
+Docs/Tools/                                             (stale upstream docs)
+mcp.json                                                (example config, top-level)
+```
+
+**After:**
+```
+plugin/                  ★ THE UE PLUGIN
+server/                  ★ THE PYTHON MCP SERVER
+sample/                  ★ minimal dev/test UE project (plugin junctioned in)
+docs/                    architecture, install, tool reference
+tests/                   integration tests (stub at v0.4)
+examples/                example MCP config + workflows (kit_inventory.md)
+scripts/                 setup-dev-junction.ps1
+README.md, CHANGELOG.md, CONTRIBUTING.md, LICENSE
+```
+
+`git mv` preserved history across all file moves — `git log --follow plugin/Source/UnrealMCP/Private/UnrealMCPBridge.cpp` traces all the way back through `MCPGameProject/Plugins/UnrealMCP/...` and into upstream chongdashu commits.
+
+### Renamed
+
+- `MCPGameProject` → `sample` (clearer naming — it's a dev/test bed, not "the project")
+- `MCPGameProject.uproject` → `UnrealMCPSample.uproject`
+- `Source/MCPGameProject/` module → `Source/UnrealMCPSample/`
+- All inner module file/class names: `MCPGameProject` → `UnrealMCPSample`
+- Sample `.uproject` bumped: `EngineAssociation: "5.5"` → `"5.7"`, `BuildSettingsVersion.V5` → `V6`, `IncludeOrderVersion.Unreal5_5` → `Latest`
+- `Python/` → `server/`
+- `Docs/CONTRIBUTING.md` → `CONTRIBUTING.md` (top-level convention)
+- `mcp.json` → `examples/mcp-client-config.json`
+
+### Removed (stale upstream artifacts)
+
+- `Docs/Tools/*.md` (5 files) — written against upstream v0.1 surface, predate our v0.2/v0.3 additions. Per-category docs will regenerate as Sprint 2 lands.
+- `Docs/README.md` — upstream landing page; top-level README.md covers it.
+- `Python/scripts/*.py` (7 files) — upstream integration test stubs, never validated against our state.
+- `MCPGameProject.sln` — UE regenerates per-machine; never useful in git.
+
+### Added
+
+- **`LICENSE`** — MIT, with attribution to both upstream chongdashu and this fork. Previously the repo had no `LICENSE` file despite the MIT badge in README.
+- **`docs/architecture.md`** — process diagram + protocol explanation.
+- **`docs/installing.md`** — separate user-vs-contributor install paths.
+- **`docs/tools/README.md`** — explains the v0.3 tool catalog; per-category docs to follow in Sprint 2.
+- **`tests/README.md`** — testing strategy + rationale for why there aren't tests yet.
+- **`examples/kit_inventory.md`** — the actual Lauder Phase 7.1 workflow as a worked example of the asset tools.
+- **`scripts/setup-dev-junction.ps1`** — bootstraps the `sample/Plugins/UnrealMCP` junction for contributors. Idempotent.
+- **`sample/Plugins/.gitkeep`** — keeps the directory in git so the junction script has a known place to land.
+
+### Fixed — pre-existing UMG bug
+
+The Phase 5.3 UMG extensions (v0.1.0, 8 new handler methods) were defined in
+`UnrealMCPUMGCommands.cpp` but never declared in the header. This snuck past
+Lauder3's incremental builds because UE's adaptive non-unity build skipped
+recompiling unchanged files. The sample project's clean-from-scratch build
+caught it. Added 8 missing declarations to
+`plugin/Source/UnrealMCP/Public/Commands/UnrealMCPUMGCommands.h`.
+
+### Verified
+
+- `mklink /J sample\Plugins\UnrealMCP plugin\` creates the junction; UE follows it transparently.
+- `Build.bat UnrealMCPSampleEditor Win64 Development -Project="...UnrealMCPSample.uproject"` builds clean from scratch (5.7s incremental after first-time setup, 56s first-time including UHT manifest generation).
+- All Lauder3-side incremental builds continue working unchanged (plugin snapshot at `lauder3/Lauder/Plugins/UnrealMCP/` is the consumer side, untouched by this restructure beyond the UMG header sync).
+
 ## [0.3.0] — 2026-05-30 — Sprint 1 completion: editor state + level management + cleanup
 
 ### Added — Editor State extensions (5 tools)

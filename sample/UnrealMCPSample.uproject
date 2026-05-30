@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.7",
+	"Category": "",
+	"Description": "Minimal UE 5.7 dev/test project for the unreal-mcp plugin. Plugin source lives at the repo's top-level plugin/ directory; this project sees it via the Plugins/UnrealMCP junction created by scripts/setup-dev-junction.ps1.",
+	"Modules": [
+		{
+			"Name": "UnrealMCPSample",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": ["Editor"]
+		}
+	]
+}

@@ -23,6 +23,7 @@
  *
  * Sprint 2:
  *   migrate_assets           — copy assets + deps to another project's Content dir
+ *   import_asset             — import an .fbx / .png / .wav / etc. file into the project
  */
 class UNREALMCP_API FUnrealMCPAssetCommands
 {
@@ -46,6 +47,7 @@ private:
     TSharedPtr<FJsonObject> HandleRenameAsset(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params);
 
-    // Sprint 2 — cross-project migration
+    // Sprint 2 — cross-project migration + asset import
     TSharedPtr<FJsonObject> HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleImportAsset(const TSharedPtr<FJsonObject>& Params);
 };

@@ -414,3 +414,73 @@ def register_asset_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"migrate_assets error: {e}")
             return {"error": str(e)}
+
+    @mcp.tool()
+    def import_asset(
+        ctx: Context,
+        file_path: str,
+        destination_path: str,
+        replace_existing: bool = True,
+        save: bool = True,
+    ) -> Dict[str, Any]:
+        """Import a source file (.fbx, .png, .wav, etc.) into the project as a UAsset.
+
+        Single generic import tool — UE's `UAssetImportTask` auto-detects the
+        file type from extension and selects the appropriate factory:
+
+            FBX / OBJ         → StaticMesh, SkeletalMesh, AnimSequence
+            PNG / TGA / PSD
+            EXR / HDR / JPG   → Texture2D
+            WAV / MP3 / OGG   → SoundWave
+            FBX (skeleton)    → Skeleton / PhysicsAsset
+
+        Use cases for Lauder:
+        - Importing Megascans surface PBR sets that didn't come over with
+          migrate_assets (e.g., variants downloaded later from Quixel Bridge).
+        - Importing custom audio cues for the workbench / extraction beacon.
+        - Importing Blender-exported FBX meshes for custom props.
+
+        Args:
+            file_path:        Absolute filesystem path to the source file.
+            destination_path: /Game/-prefixed package path where the imported
+                              asset should land (e.g. "/Game/Imported/MyMesh").
+                              The folder is created if it doesn't exist.
+            replace_existing: Whether to overwrite an asset already at the
+                              destination path. Default True.
+            save:             Save the new asset to disk immediately after
+                              import. Default True (False keeps it in-memory
+                              only — useful for batch operations followed by
+                              a single save_all_dirty call).
+
+        Returns:
+            {
+              "file_path": "...",
+              "destination_path": "/Game/...",
+              "imported_object_paths": ["/Game/Imported/MyMesh.MyMesh", ...],
+              "imported_count": N,
+              "success": bool,
+              "note"?: "..."  (only on imported_count==0)
+            }
+
+        Note: a single source file can produce multiple imported objects.
+        FBX with skeletal animation, for example, produces SkeletalMesh +
+        Skeleton + AnimSequence + PhysicsAsset. All paths returned in
+        imported_object_paths.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"error": "Failed to connect to Unreal Engine"}
+
+            return _unwrap(unreal.send_command("import_asset", {
+                "file_path": file_path,
+                "destination_path": destination_path,
+                "replace_existing": replace_existing,
+                "save": save,
+            }))
+
+        except Exception as e:
+            logger.error(f"import_asset error: {e}")
+            return {"error": str(e)}

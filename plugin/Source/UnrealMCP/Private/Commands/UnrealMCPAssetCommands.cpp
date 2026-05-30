@@ -9,6 +9,9 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
+#include "AssetToolsModule.h"
+#include "AssetImportTask.h"
+#include "IAssetTools.h"
 
 namespace
 {
@@ -76,6 +79,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleCommand(const FString& Co
     if (CommandType == TEXT("rename_asset"))           return HandleRenameAsset(Params);
     if (CommandType == TEXT("duplicate_asset"))        return HandleDuplicateAsset(Params);
     if (CommandType == TEXT("migrate_assets"))         return HandleMigrateAssets(Params);
+    if (CommandType == TEXT("import_asset"))           return HandleImportAsset(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown asset command: %s"), *CommandType));
@@ -605,5 +609,88 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMigrateAssets(const TShar
     Result->SetStringField(TEXT("destination_root"), DestContentRoot);
     Result->SetBoolField(TEXT("include_dependencies"), bIncludeDeps);
     Result->SetArrayField(TEXT("errors"), ErrorMessages);
+    return Result;
+}
+
+
+// ─── Sprint 2 — asset import ──────────────────────────────────────────────────
+//
+// Single generic import tool. UE's UAssetImportTask + IAssetTools::ImportAssetTasks
+// auto-detects the file type from extension and selects the appropriate factory
+// (FBX → mesh/skeletal/anim, .png/.tga/.psd → texture, .wav/.mp3 → sound, etc.).
+// Specialized variants per-type would be duplication; if FBX-specific options
+// like LOD / material import behavior become needed, add an optional
+// `import_options` JSON struct rather than splitting the tool.
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleImportAsset(const TSharedPtr<FJsonObject>& Params)
+{
+    FString FilePath;
+    if (!Params->TryGetStringField(TEXT("file_path"), FilePath) || FilePath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing 'file_path' parameter (absolute filesystem path to the source file)"));
+    }
+
+    FString DestinationPath;
+    if (!Params->TryGetStringField(TEXT("destination_path"), DestinationPath) || DestinationPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing 'destination_path' parameter (/Game/-prefixed package path)"));
+    }
+
+    bool bReplaceExisting = true;
+    Params->TryGetBoolField(TEXT("replace_existing"), bReplaceExisting);
+
+    bool bSave = true;
+    Params->TryGetBoolField(TEXT("save"), bSave);
+
+    if (!FPaths::FileExists(FilePath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Source file does not exist: %s"), *FilePath));
+    }
+
+    // Build the import task. UE will choose the factory based on extension.
+    UAssetImportTask* Task = NewObject<UAssetImportTask>();
+    Task->Filename = FilePath;
+    Task->DestinationPath = DestinationPath;
+    Task->bAutomated = true;             // no modal UI prompts
+    Task->bSave = bSave;
+    Task->bReplaceExisting = bReplaceExisting;
+    Task->bReplaceExistingSettings = bReplaceExisting;
+
+    // Pin the task in the GC root so it survives until ImportAssetTasks completes
+    Task->AddToRoot();
+
+    TArray<UAssetImportTask*> Tasks;
+    Tasks.Add(Task);
+
+    FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+    AssetToolsModule.Get().ImportAssetTasks(Tasks);
+
+    // Collect the imported object paths
+    TArray<TSharedPtr<FJsonValue>> ImportedObjects;
+    for (const FString& Path : Task->ImportedObjectPaths)
+    {
+        ImportedObjects.Add(MakeShared<FJsonValueString>(Path));
+    }
+    const int32 ImportedCount = ImportedObjects.Num();
+
+    Task->RemoveFromRoot();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("file_path"), FilePath);
+    Result->SetStringField(TEXT("destination_path"), DestinationPath);
+    Result->SetArrayField(TEXT("imported_object_paths"), ImportedObjects);
+    Result->SetNumberField(TEXT("imported_count"), ImportedCount);
+    Result->SetBoolField(TEXT("success"), ImportedCount > 0);
+    if (ImportedCount == 0)
+    {
+        Result->SetStringField(TEXT("note"),
+            TEXT("ImportAssetTasks returned 0 imported objects. Typical causes: "
+                 "unsupported file extension (no factory registered), source file "
+                 "corrupted, destination_path already has an asset and bReplaceExisting=false, "
+                 "or the import factory raised an error (check editor log)."));
+    }
     return Result;
 }

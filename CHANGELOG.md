@@ -6,16 +6,52 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), 
 
 ## [Unreleased] — Sprint 2 in progress
 
-Sprint 2 status — landing v0.5.x as each tool ships:
+Sprint 2 status — landing v0.5.x / v0.6.x / v0.7.x as each category ships:
 
-- **v0.5.0 (today): `migrate_assets`** — see entry below. The killer tool for Phase 7.2/7.3.
-- Pending: `import_fbx`, `import_texture`, `import_audio`, `cook_for_migration` (asset import category, 4 tools)
-- Pending: materials category (~5 tools): `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`
-- Pending: outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
+- **v0.5.0: `migrate_assets`** ✅
+- **v0.5.1: `import_asset`** ✅ (consolidated from the original 4-tool plan — UE's `UAssetImportTask` auto-detects file type, so `import_fbx`/`import_texture`/`import_audio` would be duplicate wrappers. `cook_for_migration` deferred — not needed for Phase 7.2; the migration use case is covered by `migrate_assets` alone.)
+- **v0.6.0 (next):** materials category (~5 tools): `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`
+- **v0.7.0 (after):** outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
 
 Deferred to Sprint 2 from Sprint 1 (still pending):
 
 - **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7 deprecates `FImageUtils::CompressImageArray` in favor of `PNGCompressImageArray`, but the new API uses `TArrayView64<const FColor>` + `TArray64<uint8>`, which requires rewriting the surrounding `ReadPixels` path. The deprecation only emits a warning today (hard error in a future release) so it's safe to defer.
+
+## [0.5.1] — 2026-05-31 — import_asset
+
+### Added — `import_asset` (asset management category)
+
+Generic source-file → UAsset import. UE's `UAssetImportTask` +
+`IAssetTools::ImportAssetTasks` auto-detects the file type from extension and
+selects the appropriate factory:
+
+| Extension | Imported as |
+|---|---|
+| `.fbx`, `.obj`, `.gltf` | StaticMesh / SkeletalMesh / AnimSequence |
+| `.png`, `.tga`, `.psd`, `.exr`, `.hdr`, `.jpg` | Texture2D |
+| `.wav`, `.mp3`, `.ogg`, `.flac` | SoundWave |
+| FBX with skeleton | Skeleton + PhysicsAsset + AnimSequence + SkeletalMesh |
+
+This consolidates the originally-planned `import_fbx` / `import_texture` /
+`import_audio` tools into one — they'd have been near-duplicate wrappers
+since UE picks the factory automatically. If FBX-specific options become
+needed later (LOD splitting, material import behavior), they'll be added
+as an optional `import_options` JSON struct on this same tool rather than
+splitting the API.
+
+**Args:** `file_path`, `destination_path`, `replace_existing=True`, `save=True`.
+
+**Returns:** `imported_object_paths[]`, `imported_count`, `success`,
+plus a `note` field explaining typical failure causes when count is 0.
+
+C++ side: `UnrealMCPAssetCommands::HandleImportAsset`. Python side:
+`server/tools/asset_tools.py::import_asset`. No `Build.cs` change needed —
+`AssetTools` module is pulled in transitively via `UnrealEd`.
+
+### Verified
+
+Live Coding patch 2 against UE 5.7 LauderEditor: 7.3s incremental,
+clean link, plugin DLL patched in-place.
 
 ## [0.5.0] — 2026-05-31 — Sprint 2 kickoff: cross-project asset migration
 

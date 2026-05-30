@@ -1,9 +1,13 @@
 # Unreal MCP
 Python/unreal_mcp.log
 
-# AI-related files
+# AI-related files (IDE-specific rule files consolidated into Docs/CONTRIBUTING.md 2026-05-30)
+.cursor/
 .cursorrules
 .cursorignore
+.windsurfrules
+.clinerules
+.github/copilot-instructions.md
 CLAUDE.md
 
 # Code-copy related files

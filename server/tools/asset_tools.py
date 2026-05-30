@@ -28,23 +28,9 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from tools._common import _unwrap
+
 logger = logging.getLogger("UnrealMCP")
-
-
-def _unwrap(response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Pull the result payload out of an Unreal MCP response envelope.
-
-    The C++ side wraps successful results as `{result: {...}}` and errors as
-    `{error: "..."}`. Both shapes have been seen historically so we accept
-    either, and fall back to returning the whole response on shape mismatch.
-    """
-    if not response:
-        return {"error": "no response from Unreal"}
-    if "error" in response:
-        return {"error": response["error"]}
-    if "result" in response:
-        return response["result"]
-    return response
 
 
 def register_asset_tools(mcp: FastMCP):

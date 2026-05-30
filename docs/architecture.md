@@ -11,15 +11,17 @@ editor. The two processes talk over a local TCP socket.
 │                          │  TCP    │  MCPServerRunnable         │
 │  unreal_mcp_server.py    │  55557  │      │                     │
 │    │                     │ ◄─────► │      ↓                     │
-│    ├─ tools/asset_tools  │  JSON   │  UnrealMCPBridge           │
-│    ├─ tools/editor_tools │         │      │                     │
-│    ├─ tools/level_tools  │         │      ├─► EditorCommands    │
-│    ├─ tools/blueprint_   │         │      ├─► BlueprintCommands │
-│    ├─ tools/node_tools   │         │      ├─► NodeCommands      │
-│    ├─ tools/project_     │         │      ├─► ProjectCommands   │
-│    ├─ tools/umg_tools    │         │      ├─► UMGCommands       │
-│    └─ tools/asset_tools  │         │      ├─► AssetCommands     │
-│                          │         │      └─► LevelCommands     │
+│    ├─ tools/editor_tools │  JSON   │  UnrealMCPBridge           │
+│    ├─ tools/blueprint_   │         │      │                     │
+│    ├─ tools/node_tools   │         │      ├─► EditorCommands    │
+│    ├─ tools/project_     │         │      ├─► BlueprintCommands │
+│    ├─ tools/umg_tools    │         │      ├─► NodeCommands      │
+│    ├─ tools/asset_tools  │         │      ├─► ProjectCommands   │
+│    ├─ tools/level_tools  │         │      ├─► UMGCommands       │
+│    ├─ tools/material_    │         │      ├─► AssetCommands     │
+│    ├─ tools/outliner_    │         │      ├─► LevelCommands     │
+│    └─ tools/_common      │         │      ├─► MaterialCommands  │
+│       (shared _unwrap)   │         │      └─► OutlinerCommands  │
 │  @mcp.tool()             │         │                            │
 │  decorated functions     │         │                            │
 └──────────────────────────┘         └────────────────────────────┘

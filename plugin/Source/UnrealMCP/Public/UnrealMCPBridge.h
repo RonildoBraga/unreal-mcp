@@ -4,7 +4,6 @@
 #include "EditorSubsystem.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
-#include "Http.h"
 #include "Json.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"

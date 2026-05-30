@@ -29,11 +29,11 @@ Apply to anything in `Python/tools/*.py` decorated with `@mcp.tool()`.
   on exception. The MCP client surfaces this cleanly; uncaught exceptions
   often blow up the whole tool invocation chain.
 
-See `Python/tools/asset_tools.py` for a worked example following this style.
+See `server/tools/asset_tools.py` for a worked example following this style.
 
 ## Guidelines for C++ command handlers
 
-Apply to anything in `MCPGameProject/Plugins/UnrealMCP/Source/UnrealMCP/Private/Commands/`.
+Apply to anything in `plugin/Source/UnrealMCP/Private/Commands/`.
 
 - **One category = one `FUnrealMCP<Category>Commands` class** under
   `Commands/`. The `HandleCommand(CommandType, Params)` method dispatches to

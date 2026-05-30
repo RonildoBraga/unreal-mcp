@@ -24,15 +24,17 @@ Drive Unreal Engine 5.7 from any Model Context Protocol (MCP) client — Claude 
 
 | Category | Capabilities |
 |----------|-------------|
-| **Actors** | Create, delete, set transforms, query properties, find/list actors |
+| **Actors** | Spawn (generic + StaticMeshActor with mesh assignment), delete, set transforms + arbitrary properties via dotted paths (`PointLightComponent.Intensity`, `Settings.AutoExposureBias`), query |
 | **Blueprints** | Create classes with custom components; add nodes; compile; spawn instances |
-| **UMG widgets** | Create widget BPs; add text/buttons/progress bars; bind events; viewport |
-| **Editor state** | Viewport camera read/write; screenshots; console commands; CVars |
+| **UMG widgets** | Create widget BPs; add text/buttons; bind events; viewport |
+| **Editor state** | Viewport camera + mode (Lit/Unlit/Wireframe/…); inline-image screenshots; console commands; CVars; output log tail; async compile-queue status |
 | **Levels** | Get/open/save current level; save all dirty |
-| **Assets** | List, search by class, dependency + referencer graph; move, delete, rename, duplicate |
+| **Assets** | List, search by class, dependency + referencer graph; move, delete, rename, duplicate, **migrate cross-project + finalize_migration ref-fixup, import** |
+| **Materials** | Create material instances; tune parameters; query parent + uses |
+| **Outliner** | Get/create folders; move actors to folders; list actors by folder |
 | **Input** | Input action mapping creation |
 
-See `docs/tools/README.md` for the full v0.3.0 tool catalog (~54 tools).
+See `docs/tools/README.md` for the full v0.7.7 tool catalog (~69 tools).
 
 ## Layout
 

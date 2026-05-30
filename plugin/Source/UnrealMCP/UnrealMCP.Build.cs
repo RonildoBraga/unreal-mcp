@@ -31,14 +31,15 @@ public class UnrealMCP : ModuleRules
 				"InputCore",
 				"Networking",
 				"Sockets",
-				"HTTP",
 				"Json",
 				"JsonUtilities",
 				"DeveloperSettings",
 				"RenderCore"   // v0.7.7: FlushRenderingCommands for take_screenshot redraw fix
 			}
 		);
-		
+		// v0.7.8 cleanup: dropped HTTP — no actual HTTP request types referenced anywhere
+		// in the module (only a stale `#include "Http.h"` in UnrealMCPBridge.h, also removed).
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -51,24 +52,24 @@ public class UnrealMCP : ModuleRules
 				"SlateCore",
 				"UMG",
 				"Kismet",
-				"KismetCompiler",
 				"BlueprintGraph",
 				"Projects",
 				"AssetRegistry"
 			}
 		);
-		
+		// v0.7.8 cleanup: dropped KismetCompiler — no FKismetCompiler* APIs used anywhere.
+
 		if (Target.bBuildEditor == true)
 		{
 			PrivateDependencyModuleNames.AddRange(
 				new string[]
 				{
-					"PropertyEditor",      // For widget property editing
-					"ToolMenus",           // For editor UI
-					"BlueprintEditorLibrary", // For Blueprint utilities
-					"UMGEditor"           // For WidgetBlueprint.h and other UMG editor functionality
+					"UMGEditor"   // For WidgetBlueprint.h and other UMG editor functionality
 				}
 			);
+			// v0.7.8 cleanup: dropped PropertyEditor / ToolMenus / BlueprintEditorLibrary —
+			// not referenced anywhere in the module. UMGEditor is the only remaining
+			// editor-only dependency.
 		}
 		
 		DynamicallyLoadedModuleNames.AddRange(

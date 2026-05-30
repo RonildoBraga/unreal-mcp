@@ -4,6 +4,57 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.7.8] — 2026-05-31 — Cleanup pass (dead code + dedup + doc sync)
+
+No new functionality. Post-Sprint-2 audit pruned material that had drifted:
+
+### Dead code removed
+- `FUnrealMCPBlueprintCommands::HandleSpawnBlueprintActor` and its dispatch
+  branch + private declaration. The bridge routes `spawn_blueprint_actor`
+  exclusively to `FUnrealMCPEditorCommands`; this category's copy was
+  unreachable and at drift risk from the live one. ~60 lines removed.
+- Dead `add_blueprint_get_component_node` bridge routing — the command
+  name is not handled by any category, so a stray external call would
+  produce a confusing nested-error response. Routing line removed.
+
+### Python dedup
+- New `server/tools/_common.py` exporting `_unwrap`. The four-way duplicate
+  in `asset_tools.py`, `level_tools.py`, `material_tools.py`,
+  `outliner_tools.py` consolidated to one import. ~30 lines removed.
+
+### Build.cs slim
+- Dropped unused module deps: `HTTP`, `KismetCompiler`, `PropertyEditor`,
+  `ToolMenus`, `BlueprintEditorLibrary`. Verified via grep across
+  `plugin/Source/UnrealMCP/` — no reference to any API from these modules.
+- Dropped the stale `#include "Http.h"` in `UnrealMCPBridge.h`.
+
+### Stale documentation sync
+- `README.md`, `docs/tools/README.md`: tool count v0.3.0 / ~54 → v0.7.7 / ~69,
+  category table re-aligned with shipped reality (Material + Outliner
+  rows added; capability summaries reflect v0.7.x power tools).
+- `docs/architecture.md` ASCII diagram: added MaterialCommands +
+  OutlinerCommands hops on the C++ side; added `_common` and the two
+  new tool modules on the Python side.
+- `CONTRIBUTING.md`: paths corrected for the v0.4.0 restructure
+  (`Python/tools/...` → `server/tools/...`, `MCPGameProject/Plugins/...`
+  → `plugin/...`).
+- `plugin/UnrealMCP.uplugin`: VersionName 1.0 → 0.7.7, Version 1 → 8,
+  CreatedBy / DocsURL / SupportURL filled in.
+- `sample/Config/DefaultEngine.ini`: removed dead `MCPGameProject` actor
+  redirect (pre-v0.4.0 leftover; sample module is now `UnrealMCPSample`).
+- `unreal_mcp_server.py` `info()` prompt: replaced the stale ~25-tool
+  hand-maintained list with a one-screen overview + pointer to
+  `tools/list` for the authoritative catalog.
+
+### Why this matters
+
+These items were all from before v0.4.0 (the plugin / server / sample
+restructure) or v0.5+ (Material / Outliner additions). They created small
+"is this still real?" papercuts for anyone reading the code or docs. Single
+cleanup commit clears the deck before Sprint 3 work begins.
+
+Verified: full UBT rebuild of `LauderEditor` passes after the changes.
+
 ## [0.7.5–0.7.7] — 2026-05-31 — Struct traversal, viewport mode, screenshot redraw + introspection
 
 Three closely-coupled patches landing together because Phase 7.2 of lauder3

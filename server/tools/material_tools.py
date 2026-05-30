@@ -27,17 +27,9 @@ from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from tools._common import _unwrap
+
 logger = logging.getLogger("UnrealMCP")
-
-
-def _unwrap(response):
-    if not response:
-        return {"error": "no response from Unreal"}
-    if "error" in response:
-        return {"error": response["error"]}
-    if "result" in response:
-        return response["result"]
-    return response
 
 
 def register_material_tools(mcp: FastMCP):

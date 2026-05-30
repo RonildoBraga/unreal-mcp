@@ -10,12 +10,51 @@ Sprint 2 status — landing v0.5.x / v0.6.x / v0.7.x as each category ships:
 
 - **v0.5.0: `migrate_assets`** ✅
 - **v0.5.1: `import_asset`** ✅ (consolidated from the original 4-tool plan — UE's `UAssetImportTask` auto-detects file type, so `import_fbx`/`import_texture`/`import_audio` would be duplicate wrappers. `cook_for_migration` deferred — not needed for Phase 7.2; the migration use case is covered by `migrate_assets` alone.)
-- **v0.6.0 (next):** materials category (~5 tools): `get_material_parameters`, `set_material_instance_param`, `create_material_instance`, `get_material_uses`, `list_material_instances_of_parent`
-- **v0.7.0 (after):** outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
+- **v0.6.0: materials category (5 tools)** ✅ — see entry below.
+- **v0.7.0 (next):** outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
 
 Deferred to Sprint 2 from Sprint 1 (still pending):
 
 - **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7 deprecates `FImageUtils::CompressImageArray` in favor of `PNGCompressImageArray`, but the new API uses `TArrayView64<const FColor>` + `TArray64<uint8>`, which requires rewriting the surrounding `ReadPixels` path. The deprecation only emits a warning today (hard error in a future release) so it's safe to defer.
+
+## [0.6.0] — 2026-05-31 — Materials category (5 tools)
+
+### Added — material category command handler
+
+New `FUnrealMCPMaterialCommands` C++ class wired into `UUnrealMCPBridge` dispatch.
+Five tools covering the common workflows for inspecting, creating, and tuning
+material instances:
+
+- **`get_material_parameters(material_path)`** — read scalar/vector/texture parameter names + values. Works on base `UMaterial` (returns defaults) or `UMaterialInstance` (returns current values which may override base).
+- **`set_material_instance_param(material_instance_path, param_name, param_type, value)`** — override a parameter on a `UMaterialInstanceConstant`. `param_type` is `"scalar"` (number), `"vector"` (`{r,g,b,a}` object), or `"texture"` (asset path). Saves the instance on success.
+- **`create_material_instance(parent_material_path, target_path)`** — create a new `UMaterialInstanceConstant` derived from a parent. Uses `UMaterialInstanceConstantFactoryNew` + `IAssetTools::CreateAsset` (the public `UMaterialEditingLibrary::CreateMaterialInstanceAsset` helper doesn't exist in UE 5.7's API surface — common gotcha).
+- **`get_material_uses(material_path)`** — list assets that reference this material. Equivalent to UE's "Reference Viewer" Content Browser action.
+- **`list_material_instances_of_parent(parent_material_path, search_path="/Game")`** — every `UMaterialInstanceConstant` whose parent is the given material. Loads each candidate to read its parent reference (necessary for accuracy across UE versions).
+
+**Use case driving the work:** Lauder Phase 7.2 — once Goddess Temple master
+materials (`M_BlendMaster`, `M_SSSMaster`, `M_StandardMaster`,
+`M_FoliageCustomWind`) are migrated into Lauder3, we'll create instances of
+them, tune scalar/vector/texture params to suit the cozy temple alcove mood,
+and inspect which assets use which.
+
+### Changed — Build.cs
+
+Added `"MaterialEditor"` to `PrivateDependencyModuleNames`. Required to link
+against `UMaterialEditingLibrary` (which lives in the MaterialEditor module,
+not the runtime Engine module). UE 5.7 fact: `MaterialEditor` is editor-only,
+which matches our plugin's `Type = "Editor"` declaration in `UnrealMCP.uplugin`.
+
+### Verified
+
+Full UBT rebuild against UE 5.7 LauderEditor — 13.3s, all 6 actions
+(3 compile + 2 link + 1 metadata) succeeded, `UnrealEditor-UnrealMCP.dll`
+relinked cleanly with the new MaterialEditor dep.
+
+### Known fix history (worth keeping for future API archaeology)
+
+- First attempt called `UMaterialEditingLibrary::CreateMaterialInstanceAsset(parent, name, path)` — function doesn't exist in UE 5.7 (likely never did publicly).
+- Fixed by switching to the factory-based path: `UMaterialInstanceConstantFactoryNew` (UnrealEd module) + `IAssetTools::CreateAsset` (AssetTools module). The factory's `InitialParent` UPROPERTY carries the parent through `FactoryCreateNew`.
+- First link attempt then failed because the rest of the Material API (`SetMaterialInstanceParent`, `SetMaterialInstance*ParameterValue`, `UpdateMaterialInstance`) lives in the `MaterialEditor` module, not `UnrealEd`. Build.cs change resolved it.
 
 ## [0.5.1] — 2026-05-31 — import_asset
 

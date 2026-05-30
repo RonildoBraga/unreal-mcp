@@ -59,6 +59,7 @@
 #include "Commands/UnrealMCPUMGCommands.h"
 #include "Commands/UnrealMCPAssetCommands.h"
 #include "Commands/UnrealMCPLevelCommands.h"
+#include "Commands/UnrealMCPMaterialCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -73,6 +74,7 @@ UUnrealMCPBridge::UUnrealMCPBridge()
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
     AssetCommands = MakeShared<FUnrealMCPAssetCommands>();
     LevelCommands = MakeShared<FUnrealMCPLevelCommands>();
+    MaterialCommands = MakeShared<FUnrealMCPMaterialCommands>();
 }
 
 UUnrealMCPBridge::~UUnrealMCPBridge()
@@ -84,6 +86,7 @@ UUnrealMCPBridge::~UUnrealMCPBridge()
     UMGCommands.Reset();
     AssetCommands.Reset();
     LevelCommands.Reset();
+    MaterialCommands.Reset();
 }
 
 // Initialize subsystem
@@ -301,6 +304,15 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("save_all_dirty"))
             {
                 ResultJson = LevelCommands->HandleCommand(CommandType, Params);
+            }
+            // Material Commands (Sprint 2 — material parameters, instance create + tune)
+            else if (CommandType == TEXT("get_material_parameters") ||
+                     CommandType == TEXT("set_material_instance_param") ||
+                     CommandType == TEXT("create_material_instance") ||
+                     CommandType == TEXT("get_material_uses") ||
+                     CommandType == TEXT("list_material_instances_of_parent"))
+            {
+                ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
             }
             // UMG Commands
             else if (CommandType == TEXT("create_umg_widget_blueprint") ||

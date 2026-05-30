@@ -274,6 +274,7 @@ from tools.umg_tools import register_umg_tools
 from tools.asset_tools import register_asset_tools
 from tools.level_tools import register_level_tools
 from tools.material_tools import register_material_tools
+from tools.outliner_tools import register_outliner_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -284,6 +285,7 @@ register_umg_tools(mcp)
 register_asset_tools(mcp)
 register_level_tools(mcp)
 register_material_tools(mcp)
+register_outliner_tools(mcp)
 
 @mcp.prompt()
 def info():

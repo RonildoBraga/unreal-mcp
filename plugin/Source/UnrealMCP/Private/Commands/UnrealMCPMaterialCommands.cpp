@@ -29,7 +29,11 @@ namespace
         return Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(AssetPath));
     }
 
-    IAssetRegistry* GetRegistry()
+    // Renamed from GetRegistry() to avoid an ODR collision in adaptive non-unity
+    // builds — AssetCommands.cpp has its own GetRegistry() in an anonymous
+    // namespace, which becomes a duplicate when both files land in the same
+    // unity TU. Material-specific name keeps the intent obvious at call sites.
+    IAssetRegistry* GetAssetRegistryForMaterials()
     {
         FAssetRegistryModule& Module = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
         return &Module.Get();
@@ -294,7 +298,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialUses(const 
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'material_path' parameter"));
     }
 
-    IAssetRegistry* Registry = GetRegistry();
+    IAssetRegistry* Registry = GetAssetRegistryForMaterials();
     if (!Registry)
     {
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("AssetRegistry module unavailable"));
@@ -337,7 +341,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleListMaterialInstancesO
             FString::Printf(TEXT("Could not load parent material at: %s"), *ParentPath));
     }
 
-    IAssetRegistry* Registry = GetRegistry();
+    IAssetRegistry* Registry = GetAssetRegistryForMaterials();
     if (!Registry)
     {
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("AssetRegistry module unavailable"));

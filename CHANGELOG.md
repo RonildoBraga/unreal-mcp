@@ -4,18 +4,66 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
-## [Unreleased] — Sprint 2 in progress
+## [Unreleased] — Sprint 3 planning
 
-Sprint 2 status — landing v0.5.x / v0.6.x / v0.7.x as each category ships:
+Sprint 2 ✅ DONE. **11 tools shipped across 4 categories.** Original plan was
+14 tools; we consolidated import_fbx/import_texture/import_audio into one
+`import_asset` (UE's `UAssetImportTask` auto-detects type), and deferred
+`cook_for_migration` (not needed for Phase 7.2 — `migrate_assets` covers it).
 
-- **v0.5.0: `migrate_assets`** ✅
-- **v0.5.1: `import_asset`** ✅ (consolidated from the original 4-tool plan — UE's `UAssetImportTask` auto-detects file type, so `import_fbx`/`import_texture`/`import_audio` would be duplicate wrappers. `cook_for_migration` deferred — not needed for Phase 7.2; the migration use case is covered by `migrate_assets` alone.)
-- **v0.6.0: materials category (5 tools)** ✅ — see entry below.
-- **v0.7.0 (next):** outliner category (~4 tools): `get_outliner_folders`, `move_actor_to_folder`, `create_outliner_folder`, `get_actors_in_folder`
+Sprint 3 surface (per project roadmap):
 
-Deferred to Sprint 2 from Sprint 1 (still pending):
+- **Niagara category** (~5 tools): spawn_niagara_actor, set_niagara_user_param,
+  get_niagara_systems_in_level, activate_niagara, deactivate_niagara
+- **Editor state remainder** (~3 tools): wire `take_screenshot` *return-path* to
+  surface file paths properly, get_recent_log_lines, enable_realtime_viewport
+- **Level management remainder** (~5 tools): create_level, list_levels_in_project,
+  check_map_errors, build_lighting, add_streaming_sublevel
 
-- **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7 deprecates `FImageUtils::CompressImageArray` in favor of `PNGCompressImageArray`, but the new API uses `TArrayView64<const FColor>` + `TArray64<uint8>`, which requires rewriting the surrounding `ReadPixels` path. The deprecation only emits a warning today (hard error in a future release) so it's safe to defer.
+Deferred from Sprint 1 (still pending):
+
+- **Proper screenshot path migration** to `FImageView` / `FImageBuilder`. UE 5.7
+  deprecates `FImageUtils::CompressImageArray`; the replacement uses
+  `TArrayView64<const FColor>` + `TArray64<uint8>` so we need to rewrite the
+  surrounding `ReadPixels` path. Warning today, hard error next UE release.
+
+## [0.7.0] — 2026-05-31 — Sprint 2 final: Outliner category (4 tools)
+
+### Added — outliner organization handlers
+
+New `FUnrealMCPOutlinerCommands` C++ class wired into `UUnrealMCPBridge` dispatch.
+Four tools for managing actor folder organization in the World Outliner panel:
+
+- **`get_outliner_folders()`** — every folder path visible in the current world's Outliner. Returns the union of every actor's folder label + any pending empty folders registered via `FActorFolders::ForEachFolder`.
+- **`move_actor_to_folder(actor_name, folder_path)`** — set an actor's folder label via `AActor::SetFolderPath`. Empty path moves to root. Folder auto-created if it doesn't exist.
+- **`create_outliner_folder(folder_path)`** — pre-create an empty folder via `FActorFolders::CreateFolder`. Useful when setting up organization before placing actors.
+- **`get_actors_in_folder(folder_path)`** — list actors at exactly the given folder path. Returns display name, class name, and internal UObject name per actor.
+
+**Use case for Lauder:** as Phase 7.2 migrates Megascans assets into L_Base v2,
+the Outliner gets crowded fast. Folder organization (e.g.
+`Migrated/Goddess_Temple/Candles`, `Lighting/CandlePoints`) keeps actors
+discoverable and the scene maintainable.
+
+### Known fix history (for future API archaeology)
+
+- First include attempt: `#include "ActorFolders.h"` — header doesn't exist
+  in UE 5.7. The actual path is `EditorActorFolders.h` (UnrealEd module's
+  Public include dir).
+- Anonymous-namespace `GetRegistry()` collision: when adaptive non-unity
+  build allows MaterialCommands and AssetCommands to land in the same TU,
+  both files' `(anonymous)::GetRegistry()` conflict. Renamed to
+  `GetAssetRegistryForMaterials()` in MaterialCommands to disambiguate.
+- C++ "most vexing parse" on the line
+  `const FFolder Folder(FFolder::FRootObject(World), FName(*FolderPath));`
+  Compiler reads it as a function declaration with two function-pointer
+  parameters. Split into three named locals to force variable-decl parsing.
+
+### Verified
+
+Live Coding patch against UE 5.7 LauderEditor — 8.4s incremental, 4/4 actions
+clean, plugin DLL patched in-place.
+
+## [0.6.0] — 2026-05-31 — Materials category (5 tools)
 
 ## [0.6.0] — 2026-05-31 — Materials category (5 tools)
 

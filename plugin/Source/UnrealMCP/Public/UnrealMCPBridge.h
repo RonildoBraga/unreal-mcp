@@ -16,6 +16,7 @@
 #include "Commands/UnrealMCPAssetCommands.h"
 #include "Commands/UnrealMCPLevelCommands.h"
 #include "Commands/UnrealMCPMaterialCommands.h"
+#include "Commands/UnrealMCPOutlinerCommands.h"
 #include "UnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -67,4 +68,5 @@ private:
 	TSharedPtr<FUnrealMCPAssetCommands> AssetCommands;
 	TSharedPtr<FUnrealMCPLevelCommands> LevelCommands;
 	TSharedPtr<FUnrealMCPMaterialCommands> MaterialCommands;
+	TSharedPtr<FUnrealMCPOutlinerCommands> OutlinerCommands;
 };

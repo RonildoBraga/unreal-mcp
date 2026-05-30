@@ -60,6 +60,7 @@
 #include "Commands/UnrealMCPAssetCommands.h"
 #include "Commands/UnrealMCPLevelCommands.h"
 #include "Commands/UnrealMCPMaterialCommands.h"
+#include "Commands/UnrealMCPOutlinerCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -75,6 +76,7 @@ UUnrealMCPBridge::UUnrealMCPBridge()
     AssetCommands = MakeShared<FUnrealMCPAssetCommands>();
     LevelCommands = MakeShared<FUnrealMCPLevelCommands>();
     MaterialCommands = MakeShared<FUnrealMCPMaterialCommands>();
+    OutlinerCommands = MakeShared<FUnrealMCPOutlinerCommands>();
 }
 
 UUnrealMCPBridge::~UUnrealMCPBridge()
@@ -87,6 +89,7 @@ UUnrealMCPBridge::~UUnrealMCPBridge()
     AssetCommands.Reset();
     LevelCommands.Reset();
     MaterialCommands.Reset();
+    OutlinerCommands.Reset();
 }
 
 // Initialize subsystem
@@ -313,6 +316,14 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("list_material_instances_of_parent"))
             {
                 ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
+            }
+            // Outliner Commands (Sprint 2 — actor folder organization)
+            else if (CommandType == TEXT("get_outliner_folders") ||
+                     CommandType == TEXT("move_actor_to_folder") ||
+                     CommandType == TEXT("create_outliner_folder") ||
+                     CommandType == TEXT("get_actors_in_folder"))
+            {
+                ResultJson = OutlinerCommands->HandleCommand(CommandType, Params);
             }
             // UMG Commands
             else if (CommandType == TEXT("create_umg_widget_blueprint") ||

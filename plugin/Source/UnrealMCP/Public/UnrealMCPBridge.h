@@ -7,24 +7,21 @@
 #include "Json.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
-#include "Commands/UnrealMCPEditorCommands.h"
-#include "Commands/UnrealMCPBlueprintCommands.h"
-#include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPProjectCommands.h"
-#include "Commands/UnrealMCPUMGCommands.h"
-#include "Commands/UnrealMCPAssetCommands.h"
-#include "Commands/UnrealMCPLevelCommands.h"
-#include "Commands/UnrealMCPMaterialCommands.h"
-#include "Commands/UnrealMCPOutlinerCommands.h"
 #include "UnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
 
 /**
- * Editor subsystem for MCP Bridge
- * Handles communication between external tools and the Unreal Editor
- * through a TCP socket connection. Commands are received as JSON and
- * routed to appropriate command handlers.
+ * Editor subsystem for the MCP bridge.
+ *
+ * Owns the TCP listener on port 55557, the server thread, and the
+ * dispatch entry point. Commands are JSON-decoded by the runnable,
+ * passed to ExecuteCommand, dispatched through FMCPRegistry, and
+ * normalized into the strict {success, error?, ...payload} wire shape.
+ *
+ * v0.8.0 Day 2c-ii-a: registrations are done by MCPRegistrations.cpp's
+ * file-scope FAutoRegistrar (runs on DLL load — initial AND Live Coding
+ * patch reloads). The bridge no longer owns any command-class instances.
  */
 UCLASS()
 class UNREALMCP_API UUnrealMCPBridge : public UEditorSubsystem
@@ -35,16 +32,16 @@ public:
 	UUnrealMCPBridge();
 	virtual ~UUnrealMCPBridge();
 
-	// UEditorSubsystem implementation
+	// UEditorSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	// Server functions
+	// Server
 	void StartServer();
 	void StopServer();
 	bool IsRunning() const { return bIsRunning; }
 
-	// Command execution
+	// Command execution — JSON in, serialized JSON string out.
 	FString ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params);
 
 private:
@@ -57,15 +54,4 @@ private:
 	// Server configuration
 	FIPv4Address ServerAddress;
 	uint16 Port;
-
-	// Command handler instances
-	TSharedPtr<FUnrealMCPEditorCommands> EditorCommands;
-	TSharedPtr<FUnrealMCPBlueprintCommands> BlueprintCommands;
-	TSharedPtr<FUnrealMCPBlueprintNodeCommands> BlueprintNodeCommands;
-	TSharedPtr<FUnrealMCPProjectCommands> ProjectCommands;
-	TSharedPtr<FUnrealMCPUMGCommands> UMGCommands;
-	TSharedPtr<FUnrealMCPAssetCommands> AssetCommands;
-	TSharedPtr<FUnrealMCPLevelCommands> LevelCommands;
-	TSharedPtr<FUnrealMCPMaterialCommands> MaterialCommands;
-	TSharedPtr<FUnrealMCPOutlinerCommands> OutlinerCommands;
 };

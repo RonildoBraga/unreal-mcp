@@ -46,15 +46,16 @@ public class UnrealMCP : ModuleRules
 				"UnrealEd",
 				"EditorScriptingUtilities",
 				"EditorSubsystem",
-				"LevelEditor",     // Sprint 1: ULevelEditorSubsystem (open/save level tools)
-				"MaterialEditor",  // Sprint 2: UMaterialEditingLibrary (MI tuning + creation)
+				"LevelEditor",        // Sprint 1: ULevelEditorSubsystem (open/save level tools)
+				"MaterialEditor",     // Sprint 2: UMaterialEditingLibrary (MI tuning + creation)
 				"Slate",
 				"SlateCore",
 				"UMG",
 				"Kismet",
 				"BlueprintGraph",
 				"Projects",
-				"AssetRegistry"
+				"AssetRegistry",
+				"PythonScriptPlugin"  // v0.8.1: execute_python escape hatch (IPythonScriptPlugin::ExecPythonCommandEx)
 			}
 		);
 		// v0.7.8 cleanup: dropped KismetCompiler — no FKismetCompiler* APIs used anywhere.

@@ -172,6 +172,7 @@ namespace
 				TEXT("create_input_mapping"),
 				TEXT("get_ini"),
 				TEXT("set_ini"),
+				TEXT("execute_python"),
 			});
 
 			RegBatch<FUnrealMCPAssetCommands>({

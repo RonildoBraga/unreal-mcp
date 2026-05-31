@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Json.h"
+#include "Reflection/PropertyWalker.h"
 
 // Forward declarations
 class AActor;
@@ -57,67 +58,27 @@ public:
     static bool SetObjectProperty(UObject* Object, const FString& PropertyName,
                                  const TSharedPtr<FJsonValue>& Value, FString& OutErrorMessage);
 
-    /**
-     * v0.7.4 / v0.7.5 — describes where a dotted-path resolution ends up.
-     *
-     * `ContainerAddress` + `ContainerType` define what UE reflection needs to
-     * look up the leaf property and set its value: a raw pointer to a UObject
-     * or a struct, plus the UClass / UScriptStruct that describes the layout.
-     * `OwningObject` is the nearest enclosing UObject (used for
-     * `PostEditChangeProperty` so the editor refreshes), and `OuterPropertyName`
-     * is the first path segment — handed to `PostEditChangeProperty` so the
-     * editor knows which top-level actor UPROPERTY conceptually changed.
-     */
-    struct FPropertyTarget
-    {
-        void*    ContainerAddress  = nullptr;
-        UStruct* ContainerType     = nullptr;
-        UObject* OwningObject      = nullptr;
-        FString  LeafPropertyName;
-        FString  OuterPropertyName;
+    // v0.8.0 — dotted-path traversal lifted to Reflection/PropertyWalker.
+    // These forwarders keep existing call sites compiling unchanged through
+    // Day 2 migration; they're inlined and add zero cost.
+    using FPropertyTarget = FPropertyWalker::FTarget;
 
-        // v0.7.10 — when the path ends in an array index (e.g. "OverrideMaterials.0"),
-        // the leaf isn't a named UPROPERTY on a container; it's an element address
-        // inside a TArray. The walker fills these and SetPropertyAtTarget honors
-        // them in preference to the name-based lookup.
-        FProperty* LeafPropertyOverride = nullptr;
-        void*      LeafAddressOverride  = nullptr;
-    };
-
-    /**
-     * Walk a dotted property path through FObjectProperty and FStructProperty
-     * hops. Examples that all work:
-     *   - "Intensity"                                      (plain — passes through)
-     *   - "PointLightComponent.Intensity"                  (object hop → leaf)
-     *   - "Settings.AutoExposureBias"                      (struct hop → leaf, v0.7.5)
-     *   - "Settings.ColorGrading.Highlights.Saturation"    (nested struct chain, v0.7.5)
-     *   - "PointLightComponent.LightFunctionMaterial"      (object hop → object leaf)
-     *
-     * On any failure (missing property, non-traversable hop, null ref) returns
-     * false with OutErrorMessage describing where it broke.
-     */
     static bool WalkPropertyPath(UObject* Root, const FString& Path,
-                                 FPropertyTarget& OutTarget, FString& OutErrorMessage);
+                                 FPropertyTarget& OutTarget, FString& OutErrorMessage)
+    {
+        return FPropertyWalker::Walk(Root, Path, OutTarget, OutErrorMessage);
+    }
 
-    /**
-     * Set a JSON value at the leaf of a resolved FPropertyTarget. Handles every
-     * type SetObjectProperty handles — they share an internal dispatch helper.
-     */
     static bool SetPropertyAtTarget(const FPropertyTarget& Target,
                                     const TSharedPtr<FJsonValue>& Value,
-                                    FString& OutErrorMessage);
+                                    FString& OutErrorMessage)
+    {
+        return FPropertyWalker::SetValue(Target, Value, OutErrorMessage);
+    }
 
-    /**
-     * v0.7.10 — read counterpart to SetPropertyAtTarget. Resolves the leaf
-     * via the same FPropertyTarget shape (honoring array-index leaf overrides),
-     * serializes the FProperty value to a JSON node matching the type:
-     *   - Bool / Int / Float / Double / Byte → number
-     *   - Str / Name / Enum                  → string
-     *   - Struct (Vector, Rotator, LinearColor, Color, Vector4) → [..] array
-     *   - Object reference                   → object path string ("" if null)
-     *   - Array                              → {kind: "Array", length: N, inner: "..."}
-     * Returns nullptr + error message on unsupported / unreadable types.
-     */
     static TSharedPtr<FJsonValue> GetPropertyAtTarget(const FPropertyTarget& Target,
-                                                      FString& OutErrorMessage);
+                                                      FString& OutErrorMessage)
+    {
+        return FPropertyWalker::GetValue(Target, OutErrorMessage);
+    }
 };

@@ -17,4 +17,8 @@ public:
 private:
     // Specific project command handlers
     TSharedPtr<FJsonObject> HandleCreateInputMapping(const TSharedPtr<FJsonObject>& Params);
-}; 
+
+    // v0.8.0 Day 3-4 — INI file editing (DefaultEngine, DefaultGame, etc.)
+    TSharedPtr<FJsonObject> HandleGetIni(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetIni(const TSharedPtr<FJsonObject>& Params);
+};

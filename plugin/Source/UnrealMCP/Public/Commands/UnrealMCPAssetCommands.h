@@ -53,4 +53,12 @@ private:
 
     // v0.7.3 — fix-up for migrate_assets when caller used a subfolder destination
     TSharedPtr<FJsonObject> HandleFinalizeMigration(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — cooperative workflows: point the user at what we're doing.
+    TSharedPtr<FJsonObject> HandleFocusInBrowser(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleNavigateToFolder(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleOpenInEditor(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — static mesh bounds + slot inspection before scaling/placement.
+    TSharedPtr<FJsonObject> HandleStaticMeshGetInfo(const TSharedPtr<FJsonObject>& Params);
 };

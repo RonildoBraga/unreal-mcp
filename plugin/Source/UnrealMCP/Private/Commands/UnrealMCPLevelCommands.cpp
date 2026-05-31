@@ -25,7 +25,6 @@ TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleCommand(const FString& Co
     if (CommandType == TEXT("get_current_level"))   return HandleGetCurrentLevel(Params);
     if (CommandType == TEXT("open_level"))          return HandleOpenLevel(Params);
     if (CommandType == TEXT("save_current_level"))  return HandleSaveCurrentLevel(Params);
-    if (CommandType == TEXT("save_all_dirty"))      return HandleSaveAllDirty(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown level command: %s"), *CommandType));
@@ -108,24 +107,3 @@ TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleSaveCurrentLevel(const TS
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleSaveAllDirty(const TSharedPtr<FJsonObject>& Params)
-{
-    ULevelEditorSubsystem* Sub = LevelSub();
-    if (!Sub)
-    {
-        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("LevelEditorSubsystem unavailable"));
-    }
-
-    // SaveAllDirtyLevels returns void; success determined by whether anything failed
-    // during the save process. UE displays its own UI for save conflicts, so this is
-    // mostly fire-and-forget for the MCP layer.
-    Sub->SaveAllDirtyLevels();
-
-    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-    Result->SetBoolField(TEXT("success"), true);
-    Result->SetStringField(TEXT("note"),
-        TEXT("SaveAllDirtyLevels invoked. UE handles save conflicts in its own UI; "
-             "this response indicates only that the call was dispatched, not the "
-             "outcome of every individual save."));
-    return Result;
-}

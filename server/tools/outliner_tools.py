@@ -1,5 +1,4 @@
-"""
-Outliner Tools for Unreal MCP — Sprint 2 v0.7.0.
+"""Outliner Tools for Unreal MCP.
 
 Actor folder organization in the World Outliner panel.
 
@@ -11,9 +10,9 @@ via FActorFolders.
 Tool surface (4 tools):
 
     get_outliner_folders      list every folder in the current world
-    move_actor_to_folder       set an actor's folder label
-    create_outliner_folder     register a pending (potentially empty) folder
-    get_actors_in_folder       list actors at a given folder path
+    move_actor_to_folder      set an actor's folder label
+    create_outliner_folder    register a pending (potentially empty) folder
+    get_actors_in_folder      list actors at a given folder path
 
 Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
 TCP to the C++ plugin. C++ side in
@@ -21,11 +20,11 @@ TCP to the C++ plugin. C++ side in
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from tools._common import _unwrap
+from _registry import unreal_tool
 
 logger = logging.getLogger("UnrealMCP")
 
@@ -33,7 +32,7 @@ logger = logging.getLogger("UnrealMCP")
 def register_outliner_tools(mcp: FastMCP):
     """Register Outliner tools with the MCP server."""
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_outliner_folders(ctx: Context) -> Dict[str, Any]:
         """List every folder path in the current world's Outliner.
 
@@ -42,23 +41,14 @@ def register_outliner_tools(mcp: FastMCP):
         appear before any actors are moved in).
 
         Returns:
-            {"folders": ["Lighting", "Lighting/Candles", ...], "count": N}
+            {"success": true, "folders": ["Lighting", "Lighting/Candles", ...], "count": N}
 
         Folder paths use forward slashes as hierarchy separators. An actor
         in `Lighting/Candles` appears nested under `Lighting` in the
         Outliner panel.
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("get_outliner_folders", {}))
-        except Exception as e:
-            logger.error(f"get_outliner_folders error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def move_actor_to_folder(
         ctx: Context,
         name: str,
@@ -76,22 +66,10 @@ def register_outliner_tools(mcp: FastMCP):
                          Folder is auto-created if it doesn't exist.
 
         Returns:
-            {"name": "...", "folder_path": "...", "success": bool}
+            {"success": bool, "name": "...", "folder_path": "..."}
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("move_actor_to_folder", {
-                "name": name,
-                "folder_path": folder_path,
-            }))
-        except Exception as e:
-            logger.error(f"move_actor_to_folder error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def create_outliner_folder(ctx: Context, folder_path: str) -> Dict[str, Any]:
         """Register a pending (potentially empty) folder in the Outliner.
 
@@ -105,20 +83,10 @@ def register_outliner_tools(mcp: FastMCP):
             folder_path: Slash-separated path (e.g. "Migrated/GoddessTemple").
 
         Returns:
-            {"folder_path": "...", "success": bool, "note"?: "..."}
-            note appears on success=False with a hint.
+            {"success": bool, "folder_path": "...", "note"?: "..."}
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("create_outliner_folder", {"folder_path": folder_path}))
-        except Exception as e:
-            logger.error(f"create_outliner_folder error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_actors_in_folder(ctx: Context, folder_path: str) -> Dict[str, Any]:
         """List actors at a specific Outliner folder path.
 
@@ -128,6 +96,7 @@ def register_outliner_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               "folder_path": "...",
               "actors": [
                 {"name": "<display label>", "class_name": "...", "internal_name": "..."},
@@ -140,12 +109,30 @@ def register_outliner_tools(mcp: FastMCP):
         of subfolders are not included. To get a folder's full subtree, call
         get_outliner_folders first and iterate.
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("get_actors_in_folder", {"folder_path": folder_path}))
-        except Exception as e:
-            logger.error(f"get_actors_in_folder error: {e}")
-            return {"error": str(e)}
+
+    @unreal_tool(mcp)
+    def move_actor_to_folder_batch(
+        ctx: Context,
+        moves: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Move multiple actors to Outliner folders in one MCP round-trip (v0.8.0).
+
+        Pairs with `spawn_actor_batch` + `delete_actor_batch` — after spawning a
+        dense scene, organize it into Outliner folders in a single call. Per-
+        item name resolution follows the same two-pass display-label /
+        internal-name lookup that `set_selected_actors` uses.
+
+        Args:
+            moves: List of `{"name": "...", "folder_path": "..."}` objects.
+                   Empty `folder_path` moves the actor to the Outliner root.
+
+        Returns:
+            {
+              "success": true,
+              "requested_count": M,
+              "moved_count": N,
+              "missing": [...]   # names that didn't resolve
+            }
+        """
+
+    logger.info("Outliner tools registered successfully")

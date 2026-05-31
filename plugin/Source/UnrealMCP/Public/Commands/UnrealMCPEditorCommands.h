@@ -57,4 +57,43 @@ private:
     TSharedPtr<FJsonObject> HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.7.12 — read the editor's current actor selection
+    TSharedPtr<FJsonObject> HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 2c-i+ — trigger Live Coding compile (no editor restart needed)
+    TSharedPtr<FJsonObject> HandleRecompileLive(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — selection mutation + framing (round-trip with get_selected_actors).
+    TSharedPtr<FJsonObject> HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleClearSelection(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — paged actor enumeration (replaces get_actors_in_level
+    // for any caller that doesn't want the full 744 KB dump). Class filter,
+    // name pattern, folder prefix, limit/offset.
+    TSharedPtr<FJsonObject> HandleFindActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — batch actor mutations. One MCP round-trip per scene
+    // construction step instead of N (RomanCave-style dense placement).
+    TSharedPtr<FJsonObject> HandleSpawnActorBatch(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleDeleteActorBatch(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — generalized Details-panel parity (§5).
+    // Same property-path traversal as get/set_actor_property, but the target
+    // can be ANY UObject — actor display label/internal name, /Game/ asset
+    // path, /Script/ engine class, or class default object.
+    TSharedPtr<FJsonObject> HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — viewport: frame a single actor, toggle show flags.
+    TSharedPtr<FJsonObject> HandleFrameActor(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — console-bridge unblockers for migration flow.
+    TSharedPtr<FJsonObject> HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleDismissModalDialog(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — read counterpart for actor transform (symmetry with set).
+    TSharedPtr<FJsonObject> HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params);
 };

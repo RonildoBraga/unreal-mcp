@@ -1,5 +1,11 @@
 #include "Commands/UnrealMCPEditorCommands.h"
 #include "Commands/UnrealMCPCommonUtils.h"
+#include "Reflection/ClassLookup.h"
+#include "Reflection/ObjectLookup.h"
+// v0.8.0 Day 3-4 — show flags + Slate modal dismiss + async compile wait.
+#include "ShowFlags.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SWindow.h"
 #include "Editor.h"
 #include "EditorViewportClient.h"
 #include "LevelEditorViewport.h"
@@ -168,6 +174,69 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     else if (CommandType == TEXT("pie_screenshot"))
     {
         return HandlePIEScreenshot(Params);
+    }
+    // v0.7.12 — selection introspection
+    else if (CommandType == TEXT("get_selected_actors"))
+    {
+        return HandleGetSelectedActors(Params);
+    }
+    // v0.8.0 Day 2c-i+ — programmatic Live Coding rebuild
+    else if (CommandType == TEXT("recompile_live"))
+    {
+        return HandleRecompileLive(Params);
+    }
+    // v0.8.0 Day 3-4 — selection mutation + framing
+    else if (CommandType == TEXT("set_selected_actors"))
+    {
+        return HandleSetSelectedActors(Params);
+    }
+    else if (CommandType == TEXT("clear_selection"))
+    {
+        return HandleClearSelection(Params);
+    }
+    else if (CommandType == TEXT("focus_selected_actors"))
+    {
+        return HandleFocusSelectedActors(Params);
+    }
+    else if (CommandType == TEXT("find_actors"))
+    {
+        return HandleFindActors(Params);
+    }
+    else if (CommandType == TEXT("spawn_actor_batch"))
+    {
+        return HandleSpawnActorBatch(Params);
+    }
+    else if (CommandType == TEXT("delete_actor_batch"))
+    {
+        return HandleDeleteActorBatch(Params);
+    }
+    else if (CommandType == TEXT("get_object_property"))
+    {
+        return HandleGetObjectProperty(Params);
+    }
+    else if (CommandType == TEXT("set_object_property"))
+    {
+        return HandleSetObjectProperty(Params);
+    }
+    else if (CommandType == TEXT("frame_actor"))
+    {
+        return HandleFrameActor(Params);
+    }
+    else if (CommandType == TEXT("set_show_flag"))
+    {
+        return HandleSetShowFlag(Params);
+    }
+    else if (CommandType == TEXT("wait_for_async_compile"))
+    {
+        return HandleWaitForAsyncCompile(Params);
+    }
+    else if (CommandType == TEXT("dismiss_modal_dialog"))
+    {
+        return HandleDismissModalDialog(Params);
+    }
+    else if (CommandType == TEXT("get_actor_transform"))
+    {
+        return HandleGetActorTransform(Params);
     }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
@@ -1696,6 +1765,996 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEScreenshot(const TSha
     Result->SetStringField(TEXT("path"), OutputPath);
     Result->SetNumberField(TEXT("width"), Viewport->GetSizeXY().X);
     Result->SetNumberField(TEXT("height"), Viewport->GetSizeXY().Y);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.7.12 — read the editor's current actor selection ─────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+{
+    // Returns the current viewport / Outliner actor selection. Used to capture
+    // a hand-curated subset of a scene (e.g. "the candle clusters + lanterns +
+    // floor tiles in the foreground" of a large showcase scene) without making
+    // the client guess from screenshots.
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (!Selection)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Selection subsystem unavailable"));
+    }
+
+    TArray<TSharedPtr<FJsonValue>> ActorsJson;
+    const int32 Num = Selection->Num();
+    ActorsJson.Reserve(Num);
+
+    for (int32 i = 0; i < Num; i++)
+    {
+        AActor* Actor = Cast<AActor>(Selection->GetSelectedObject(i));
+        if (!Actor) continue;
+
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("name"), Actor->GetActorLabel());
+        Obj->SetStringField(TEXT("internal_name"), Actor->GetName());
+        Obj->SetStringField(TEXT("class"), Actor->GetClass()->GetName());
+
+        const FName FolderPath = Actor->GetFolderPath();
+        Obj->SetStringField(TEXT("folder_path"), FolderPath.IsNone() ? FString() : FolderPath.ToString());
+
+        // Lightweight transform so the caller can decide what to do without
+        // re-querying per-actor. Heavier per-property reads still go through
+        // get_actor_property.
+        const FVector L = Actor->GetActorLocation();
+        TArray<TSharedPtr<FJsonValue>> Loc;
+        Loc.Add(MakeShared<FJsonValueNumber>(L.X));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Y));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Z));
+        Obj->SetArrayField(TEXT("location"), Loc);
+
+        ActorsJson.Add(MakeShared<FJsonValueObject>(Obj));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetArrayField(TEXT("actors"), ActorsJson);
+    Result->SetNumberField(TEXT("count"), ActorsJson.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// v0.8.0 Day 2c-i+ — programmatic Live Coding rebuild.
+//
+// Discovery: UE 5.7's `LiveCoding.Compile` console command IS the recompile
+// primitive — fires the same async build that Ctrl+Alt+F11 triggers. We
+// could expose this only via the existing `execute_console_command` tool,
+// but a named MCP command gives us:
+//   - A discoverable verb in tools/list
+//   - One place to add sync-wait or status-poll behavior later
+//   - Clearer intent in the autonomous-build loop (sync source →
+//     recompile_live → sleep → re-test)
+//
+// Implementation is intentionally a thin shim — Live Coding is async on
+// UE's side; the editor logs "LogLiveCoding: Live coding succeeded" or
+// "LogLiveCoding: Live coding failed" ~20-30 seconds later. Callers that
+// need to wait can tail the log via read_output_log (or sleep, which is
+// what most autonomous workflows will do).
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleRecompileLive(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor unavailable"));
+    }
+    if (!GEngine)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEngine unavailable"));
+    }
+
+    UWorld* World = GEditor->GetEditorWorldContext().World();
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Route through the standard console-command dispatch. Exec returns
+    // true if the command was recognized; the actual compile is async.
+    const bool bAccepted = GEngine->Exec(World, TEXT("LiveCoding.Compile"));
+    if (!bAccepted)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("LiveCoding.Compile not accepted by console — is Live Coding enabled in Editor Preferences?"));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("started"), true);
+    Result->SetStringField(TEXT("note"),
+        TEXT("Live Coding compile started. Tail the log (read_output_log) or sleep ~30s for 'Live coding succeeded' before invoking further changes."));
+    return FUnrealMCPCommonUtils::CreateSuccessResponse(Result);
+}
+
+
+// ─── v0.8.0 Day 3-4 — selection write side ──────────────────────────────────
+//
+// Round-trips with get_selected_actors. The motivating workflow: capture a
+// hand-curated subset of a dense scene by querying selection — then later
+// programmatically restore that subset (for re-screenshot, batch edit, etc.)
+// without the user having to re-pick in the Outliner.
+//
+// Name resolution is two-pass: first by display label (GetActorLabel, what
+// the Outliner shows + what get_selected_actors returns as "name"), then by
+// internal name (GetName, returned as "internal_name"). This matches what a
+// caller does when they pass a list back round-trip: both forms work.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* NamesJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("names"), NamesJson) || NamesJson == nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'names' parameter (array of actor names)"));
+    }
+
+    UWorld* World = GEditor->GetEditorWorldContext().World();
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Snapshot the world's actors once — many lookups against a single array
+    // is much cheaper than iterating per-name. Dense scenes can hold thousands
+    // of actors; per-name GetAllActorsOfClass would be O(N*M).
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+
+    TArray<AActor*> Resolved;
+    TArray<FString> Missing;
+    Resolved.Reserve(NamesJson->Num());
+
+    for (const TSharedPtr<FJsonValue>& V : *NamesJson)
+    {
+        if (!V.IsValid() || V->Type != EJson::String) continue;
+        const FString Name = V->AsString();
+
+        AActor* Match = nullptr;
+        // First pass: display label (Outliner-visible name).
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetActorLabel() == Name) { Match = A; break; }
+        }
+        // Second pass: internal UObject name.
+        if (!Match)
+        {
+            for (AActor* A : AllActors)
+            {
+                if (A && A->GetName() == Name) { Match = A; break; }
+            }
+        }
+
+        if (Match) { Resolved.Add(Match); }
+        else       { Missing.Add(Name);  }
+    }
+
+    // Apply selection via the editor subsystem so undo + transactions + the
+    // Outliner highlight all behave as if a human did it.
+    UEditorActorSubsystem* ActorSubsystem = GEditor->GetEditorSubsystem<UEditorActorSubsystem>();
+    if (!ActorSubsystem)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("UEditorActorSubsystem unavailable"));
+    }
+
+    GEditor->SelectNone(/*bNoteSelectionChange=*/false, /*bDeselectBSPSurfs=*/true);
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (Selection)
+    {
+        Selection->BeginBatchSelectOperation();
+        for (AActor* A : Resolved)
+        {
+            GEditor->SelectActor(A, /*bInSelected=*/true, /*bNotify=*/false);
+        }
+        Selection->EndBatchSelectOperation();
+        Selection->NoteSelectionChanged();
+    }
+
+    // Post-state authoritative count + rejection list. UE silently refuses to
+    // multi-select some special actors (AWorldSettings, ABrush volumes that
+    // sometimes resist, hidden actors, etc.) — so what we ASKED for and what's
+    // actually selected can diverge. Trust the selection itself; report the
+    // names that were resolved but didn't end up selected as `rejected`.
+    TSet<AActor*> ActuallySelected;
+    if (Selection)
+    {
+        for (int32 i = 0; i < Selection->Num(); ++i)
+        {
+            if (AActor* A = Cast<AActor>(Selection->GetSelectedObject(i)))
+            {
+                ActuallySelected.Add(A);
+            }
+        }
+    }
+    TArray<FString> Rejected;
+    for (AActor* A : Resolved)
+    {
+        if (!ActuallySelected.Contains(A))
+        {
+            Rejected.Add(A->GetActorLabel());
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("selected_count"), ActuallySelected.Num());
+    Result->SetNumberField(TEXT("requested_count"), NamesJson->Num());
+
+    TArray<TSharedPtr<FJsonValue>> MissingJson;
+    MissingJson.Reserve(Missing.Num());
+    for (const FString& M : Missing) { MissingJson.Add(MakeShared<FJsonValueString>(M)); }
+    Result->SetArrayField(TEXT("missing"), MissingJson);
+
+    TArray<TSharedPtr<FJsonValue>> RejectedJson;
+    RejectedJson.Reserve(Rejected.Num());
+    for (const FString& R : Rejected) { RejectedJson.Add(MakeShared<FJsonValueString>(R)); }
+    Result->SetArrayField(TEXT("rejected"), RejectedJson);
+
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleClearSelection(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    // bNoteSelectionChange=true so the Outliner + Details panel update.
+    GEditor->SelectNone(/*bNoteSelectionChange=*/true, /*bDeselectBSPSurfs=*/true);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    // Equivalent of pressing 'F' in the viewport — frames the current
+    // selection. Composes with set_selected_actors so callers can "select +
+    // frame" in two MCP calls without re-implementing camera math here.
+    //
+    // Uses MoveViewportCamerasToActor over the selection array directly
+    // (rather than Exec("CAMERA ALIGN")) because the Exec path depends on
+    // which viewport has focus and silently no-ops if the selection is
+    // empty — the explicit API gives us a real success/failure signal.
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (!Selection || Selection->Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Nothing selected — call set_selected_actors first"));
+    }
+
+    TArray<AActor*> SelectedActors;
+    SelectedActors.Reserve(Selection->Num());
+    for (int32 i = 0; i < Selection->Num(); ++i)
+    {
+        if (AActor* A = Cast<AActor>(Selection->GetSelectedObject(i)))
+        {
+            SelectedActors.Add(A);
+        }
+    }
+
+    if (SelectedActors.Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Selection contains no AActor — nothing to frame"));
+    }
+
+    // bActiveViewportOnly=false → move all perspective viewports so the user
+    // sees the same framing regardless of which pane has focus.
+    GEditor->MoveViewportCamerasToActor(SelectedActors, TArray<UPrimitiveComponent*>(), /*bActiveViewportOnly=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("framed_count"), SelectedActors.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — paged actor enumeration ───────────────────────────────
+//
+// Replaces `get_actors_in_level` for any caller that doesn't want the full
+// scene dump. On RomanCave (~3000 actors), get_actors_in_level returns
+// ~744 KB; this command lets the caller slice by class + name + folder and
+// page through the result with a reasonable default page size (200).
+//
+// All filter parameters are optional — `find_actors()` with no params behaves
+// like get_actors_in_level except (a) it pages by default, and (b) the per-
+// actor payload includes `internal_name` + `folder_path` (matching the
+// get_selected_actors shape, so subsequent set_selected_actors round-trips
+// just work).
+//
+// Filter semantics:
+//   pattern       — case-insensitive substring; matches against display
+//                   label OR internal name (an actor matches if either does).
+//   class_filter  — resolved via FClassLookup::Resolve; actor matches if
+//                   actor->IsA(ResolvedClass). Bare names ("StaticMeshActor"),
+//                   /Script/Engine.* paths, or anywhere-in-loaded-modules
+//                   all work — same as spawn_actor's type parameter.
+//   folder        — prefix match against the actor's Outliner folder path.
+//                   Passing "Sanctuary" matches "Sanctuary", "Sanctuary/Floor",
+//                   "Sanctuary/Walls/North", etc.
+//
+// Response shape includes `total` so callers know whether to page further:
+//   actors  — the page slice (after offset, capped at limit)
+//   count   — actors.Num() (size of the page actually returned)
+//   total   — total matching the filter, post-filter pre-paging
+//   offset  — echoed back
+//   limit   — echoed back
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFindActors(const TSharedPtr<FJsonObject>& Params)
+{
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // ─── Read + validate optional filters ─────────────────────────────────
+    FString Pattern;
+    const bool bHasPattern = Params->TryGetStringField(TEXT("pattern"), Pattern) && !Pattern.IsEmpty();
+
+    UClass* ClassFilter = nullptr;
+    FString ClassFilterStr;
+    if (Params->TryGetStringField(TEXT("class_filter"), ClassFilterStr) && !ClassFilterStr.IsEmpty())
+    {
+        FString LookupError;
+        ClassFilter = FClassLookup::Resolve(ClassFilterStr, LookupError);
+        if (!ClassFilter)
+        {
+            return FUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("class_filter '%s' did not resolve: %s"),
+                    *ClassFilterStr, *LookupError));
+        }
+        if (!ClassFilter->IsChildOf(AActor::StaticClass()))
+        {
+            return FUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("class_filter '%s' resolved to a non-AActor class (%s)"),
+                    *ClassFilterStr, *ClassFilter->GetName()));
+        }
+    }
+
+    FString FolderFilter;
+    const bool bHasFolder = Params->TryGetStringField(TEXT("folder"), FolderFilter);
+
+    // Paging — defaults chosen for "fits in a reasonable LLM context".
+    int32 Limit = 200;
+    int32 Offset = 0;
+    {
+        double LimitD = 0.0;
+        if (Params->TryGetNumberField(TEXT("limit"), LimitD)) { Limit = FMath::Max(0, FMath::FloorToInt(LimitD)); }
+        double OffsetD = 0.0;
+        if (Params->TryGetNumberField(TEXT("offset"), OffsetD)) { Offset = FMath::Max(0, FMath::FloorToInt(OffsetD)); }
+    }
+
+    // ─── Enumerate + filter ───────────────────────────────────────────────
+    // Snapshot the world's actors once; one pass for matching, then page.
+    UClass* IterClass = ClassFilter ? ClassFilter : AActor::StaticClass();
+    TArray<AActor*> Candidates;
+    UGameplayStatics::GetAllActorsOfClass(World, IterClass, Candidates);
+
+    TArray<AActor*> Matches;
+    Matches.Reserve(Candidates.Num());
+
+    for (AActor* A : Candidates)
+    {
+        if (!A) continue;
+
+        if (bHasPattern)
+        {
+            const FString Label = A->GetActorLabel();
+            const FString Internal = A->GetName();
+            const bool bLabelHit = Label.Contains(Pattern, ESearchCase::IgnoreCase);
+            const bool bInternalHit = Internal.Contains(Pattern, ESearchCase::IgnoreCase);
+            if (!bLabelHit && !bInternalHit) continue;
+        }
+
+        if (bHasFolder)
+        {
+            const FName FolderName = A->GetFolderPath();
+            const FString FolderStr = FolderName.IsNone() ? FString() : FolderName.ToString();
+            // Empty folder filter = "actors at the root", matched by non-empty
+            // folder_path with prefix. Empty filter accepts root; non-empty
+            // filter requires the path to actually start with the filter.
+            if (FolderFilter.IsEmpty())
+            {
+                if (!FolderStr.IsEmpty()) continue;
+            }
+            else if (!FolderStr.StartsWith(FolderFilter, ESearchCase::IgnoreCase))
+            {
+                continue;
+            }
+        }
+
+        Matches.Add(A);
+    }
+
+    // ─── Page + serialize ─────────────────────────────────────────────────
+    const int32 Total = Matches.Num();
+    const int32 PageStart = FMath::Min(Offset, Total);
+    const int32 PageEnd = (Limit <= 0) ? Total : FMath::Min(PageStart + Limit, Total);
+
+    TArray<TSharedPtr<FJsonValue>> ActorsJson;
+    ActorsJson.Reserve(PageEnd - PageStart);
+
+    for (int32 i = PageStart; i < PageEnd; ++i)
+    {
+        AActor* A = Matches[i];
+
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("name"), A->GetActorLabel());
+        Obj->SetStringField(TEXT("internal_name"), A->GetName());
+        Obj->SetStringField(TEXT("class"), A->GetClass()->GetName());
+
+        const FName FolderName = A->GetFolderPath();
+        Obj->SetStringField(TEXT("folder_path"),
+            FolderName.IsNone() ? FString() : FolderName.ToString());
+
+        const FVector L = A->GetActorLocation();
+        TArray<TSharedPtr<FJsonValue>> Loc;
+        Loc.Add(MakeShared<FJsonValueNumber>(L.X));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Y));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Z));
+        Obj->SetArrayField(TEXT("location"), Loc);
+
+        ActorsJson.Add(MakeShared<FJsonValueObject>(Obj));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetArrayField(TEXT("actors"), ActorsJson);
+    Result->SetNumberField(TEXT("count"), ActorsJson.Num());
+    Result->SetNumberField(TEXT("total"), Total);
+    Result->SetNumberField(TEXT("offset"), Offset);
+    Result->SetNumberField(TEXT("limit"), Limit);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — batch actor mutations ─────────────────────────────────
+//
+// Motivation: dense scene placement (RomanCave-style) was previously O(N)
+// MCP round-trips, ~50 ms each over the TCP bridge. 200 actors = 10 seconds
+// of round-trip overhead alone, plus the editor settles after each spawn.
+// Batched: one round-trip, one BeginBatchSelectOperation guard around the
+// whole sequence, ~100 ms total for the same 200 spawns.
+//
+// Failure model: per-item, not all-or-nothing. Each batch handler returns
+// {success: true, ...stats, errors: [{name, error}, ...]} even when some
+// items failed — callers can retry only the failed items.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActorBatch(const TSharedPtr<FJsonObject>& Params)
+{
+    const TArray<TSharedPtr<FJsonValue>>* ActorsJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("actors"), ActorsJson) || ActorsJson == nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'actors' parameter (array of spawn descriptors)"));
+    }
+
+    int32 SpawnedCount = 0;
+    TArray<TSharedPtr<FJsonValue>> SpawnedJson;
+    TArray<TSharedPtr<FJsonValue>> ErrorsJson;
+    SpawnedJson.Reserve(ActorsJson->Num());
+
+    for (const TSharedPtr<FJsonValue>& Item : *ActorsJson)
+    {
+        if (!Item.IsValid() || Item->Type != EJson::Object)
+        {
+            TSharedPtr<FJsonObject> Err = MakeShared<FJsonObject>();
+            Err->SetStringField(TEXT("name"), TEXT(""));
+            Err->SetStringField(TEXT("error"), TEXT("Spawn descriptor is not a JSON object"));
+            ErrorsJson.Add(MakeShared<FJsonValueObject>(Err));
+            continue;
+        }
+
+        // Dispatch each item through the existing single-spawn handler. The
+        // per-item Params is the descriptor itself — same shape as a normal
+        // spawn_actor call. Centralizing reuses ClassLookup, name-conflict
+        // detection, vector parsing, the lot.
+        const TSharedPtr<FJsonObject>& ItemParams = Item->AsObject();
+        TSharedPtr<FJsonObject> Response = HandleSpawnActor(ItemParams);
+
+        // The single-spawn handler returns either CreateErrorResponse (with
+        // success=false, error=...) or an ActorToJsonObject directly (which
+        // has no success field). Normalize.
+        FString Unused;
+        const bool bOk = Response.IsValid() && !Response->TryGetStringField(TEXT("error"), Unused);
+
+        FString ItemName;
+        ItemParams->TryGetStringField(TEXT("name"), ItemName);
+
+        if (bOk)
+        {
+            SpawnedCount++;
+            TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+            Entry->SetStringField(TEXT("name"), ItemName);
+            SpawnedJson.Add(MakeShared<FJsonValueObject>(Entry));
+        }
+        else
+        {
+            TSharedPtr<FJsonObject> Err = MakeShared<FJsonObject>();
+            Err->SetStringField(TEXT("name"), ItemName);
+            FString ErrStr;
+            Response->TryGetStringField(TEXT("error"), ErrStr);
+            Err->SetStringField(TEXT("error"), ErrStr);
+            ErrorsJson.Add(MakeShared<FJsonValueObject>(Err));
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("requested_count"), ActorsJson->Num());
+    Result->SetNumberField(TEXT("spawned_count"), SpawnedCount);
+    Result->SetArrayField(TEXT("spawned"), SpawnedJson);
+    Result->SetArrayField(TEXT("errors"), ErrorsJson);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActorBatch(const TSharedPtr<FJsonObject>& Params)
+{
+    const TArray<TSharedPtr<FJsonValue>>* NamesJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("names"), NamesJson) || NamesJson == nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'names' parameter (array of actor names)"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // One snapshot of the level — name lookups are O(M) per name otherwise.
+    // Build display-label + internal-name maps for O(1) lookup; matches the
+    // two-pass resolution that set_selected_actors uses, so callers can pass
+    // either shape.
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    TMap<FString, AActor*> ByLabel;
+    TMap<FString, AActor*> ByInternal;
+    ByLabel.Reserve(AllActors.Num());
+    ByInternal.Reserve(AllActors.Num());
+    for (AActor* A : AllActors)
+    {
+        if (!A) continue;
+        ByLabel.Add(A->GetActorLabel(), A);
+        ByInternal.Add(A->GetName(), A);
+    }
+
+    int32 DeletedCount = 0;
+    TArray<FString> Missing;
+
+    for (const TSharedPtr<FJsonValue>& V : *NamesJson)
+    {
+        if (!V.IsValid() || V->Type != EJson::String) continue;
+        const FString Name = V->AsString();
+
+        AActor** Found = ByLabel.Find(Name);
+        if (!Found) { Found = ByInternal.Find(Name); }
+        if (!Found || !*Found || !IsValid(*Found))
+        {
+            Missing.Add(Name);
+            continue;
+        }
+
+        // Drop from both maps before destroy so a duplicate name in the
+        // names list doesn't trigger a use-after-free on a stale pointer.
+        ByLabel.Remove((*Found)->GetActorLabel());
+        ByInternal.Remove((*Found)->GetName());
+
+        (*Found)->Destroy();
+        DeletedCount++;
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("requested_count"), NamesJson->Num());
+    Result->SetNumberField(TEXT("deleted_count"), DeletedCount);
+
+    TArray<TSharedPtr<FJsonValue>> MissingJson;
+    MissingJson.Reserve(Missing.Num());
+    for (const FString& M : Missing) { MissingJson.Add(MakeShared<FJsonValueString>(M)); }
+    Result->SetArrayField(TEXT("missing"), MissingJson);
+
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — generalized object-property access (§5) ────────────────
+//
+// The §5 leverage move: get/set on ANY UObject by a free-form target string,
+// not just AActor by display label. This unlocks:
+//   - World settings  ("WorldSettings")
+//   - Materials       ("/Game/M_Stone/M_Stone.M_Stone")
+//   - Blueprint CDO   ("/Game/BP_Door.BP_Door_C.Default")
+//   - Engine types    ("/Script/Engine.ExponentialHeightFogComponent.Default")
+//   - Actors          ("Altar_Lantern") — same as get/set_actor_property
+//
+// Same property-path traversal as get_actor_property — FObjectLookup::Resolve
+// replaces the actor lookup, then WalkPropertyPath descends as usual. Day 5
+// may collapse get/set_actor_property into thin shims over these.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Target, Path;
+    if (!Params->TryGetStringField(TEXT("target"), Target) || Target.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'target' parameter"));
+    }
+    if (!Params->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'path' parameter"));
+    }
+
+    FString ResolveError;
+    UObject* Root = FObjectLookup::Resolve(Target, ResolveError);
+    if (!Root)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("target '%s' did not resolve: %s"), *Target, *ResolveError));
+    }
+
+    FUnrealMCPCommonUtils::FPropertyTarget Found;
+    FString WalkError;
+    if (!FUnrealMCPCommonUtils::WalkPropertyPath(Root, Path, Found, WalkError))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(WalkError);
+    }
+
+    FString GetError;
+    TSharedPtr<FJsonValue> Value = FUnrealMCPCommonUtils::GetPropertyAtTarget(Found, GetError);
+    if (!Value.IsValid())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(GetError);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("target"), Target);
+    Result->SetStringField(TEXT("path"), Path);
+    Result->SetStringField(TEXT("root_class"), Root->GetClass()->GetName());
+    Result->SetField(TEXT("value"), Value);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Target, Path;
+    if (!Params->TryGetStringField(TEXT("target"), Target) || Target.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'target' parameter"));
+    }
+    if (!Params->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'path' parameter"));
+    }
+    if (!Params->HasField(TEXT("value")))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'value' parameter"));
+    }
+    const TSharedPtr<FJsonValue> Value = Params->Values.FindRef(TEXT("value"));
+
+    FString ResolveError;
+    UObject* Root = FObjectLookup::Resolve(Target, ResolveError);
+    if (!Root)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("target '%s' did not resolve: %s"), *Target, *ResolveError));
+    }
+
+    FUnrealMCPCommonUtils::FPropertyTarget Found;
+    FString WalkError;
+    if (!FUnrealMCPCommonUtils::WalkPropertyPath(Root, Path, Found, WalkError))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(WalkError);
+    }
+
+    FString SetError;
+    if (!FUnrealMCPCommonUtils::SetPropertyAtTarget(Found, Value, SetError))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(SetError);
+    }
+
+    // PostEditChangeProperty on the owning UObject so the editor refreshes
+    // (Details panel, viewport, render state). Same pattern as
+    // HandleSetActorProperty — keeps light intensity / fog density edits
+    // visible without a restart.
+    if (Found.OwningObject)
+    {
+        if (FProperty* OuterProp = Found.OwningObject->GetClass()->FindPropertyByName(*Found.OuterPropertyName))
+        {
+            FPropertyChangedEvent ChangeEvent(OuterProp);
+            Found.OwningObject->PostEditChangeProperty(ChangeEvent);
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("target"), Target);
+    Result->SetStringField(TEXT("path"), Path);
+    Result->SetStringField(TEXT("root_class"), Root->GetClass()->GetName());
+    Result->SetStringField(TEXT("leaf_property"), Found.LeafPropertyName);
+    Result->SetStringField(TEXT("leaf_container"),
+        Found.ContainerType ? Found.ContainerType->GetName() : FString());
+    Result->SetStringField(TEXT("owning_object_class"),
+        Found.OwningObject ? Found.OwningObject->GetClass()->GetName() : FString());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — viewport: frame_actor + set_show_flag ─────────────────
+//
+// frame_actor is the auto-fit complement of focus_selected_actors — caller
+// passes a name instead of pre-staging a selection. Useful when the agent
+// just spawned something and wants to verify it's where expected.
+//
+// set_show_flag toggles individual FEngineShowFlags entries — Game View,
+// Sprites, Bounds, Lighting, etc. Used to clean up screenshots (toggle
+// Sprites off for icons-free shots) or pivot to Game View mode for "what
+// the player sees" captures.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFrameActor(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Two-pass lookup: display label, then internal name — matches the
+    // set_selected_actors convention.
+    AActor* Target = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* A : AllActors)
+    {
+        if (A && A->GetActorLabel() == ActorName) { Target = A; break; }
+    }
+    if (!Target)
+    {
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetName() == ActorName) { Target = A; break; }
+        }
+    }
+    if (!Target)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    GEditor->MoveViewportCamerasToActor(*Target, /*bActiveViewportOnly=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("framed"), Target->GetActorLabel());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params)
+{
+    FString FlagName;
+    if (!Params->TryGetStringField(TEXT("flag"), FlagName) || FlagName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'flag' parameter"));
+    }
+    bool bEnabled = false;
+    if (!Params->TryGetBoolField(TEXT("enabled"), bEnabled))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'enabled' parameter (boolean)"));
+    }
+
+    if (!GCurrentLevelEditingViewportClient)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active level editing viewport"));
+    }
+
+    const int32 FlagIndex = FEngineShowFlags::FindIndexByName(*FlagName);
+    if (FlagIndex == INDEX_NONE)
+    {
+        // FindIndexByName matches the C++ CODE name, not the editor display
+        // label. Many flags have a different display name than code name —
+        // e.g. "Sprites" is shown to users but the code symbol is
+        // BillboardSprites. The list below uses code names.
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Unknown show flag: '%s'. Use the code name (BillboardSprites, Bounds, Grid, Lighting, PostProcessing, Game, Atmosphere, etc.) not the editor display label."),
+                *FlagName));
+    }
+
+    FEngineShowFlags& Flags = GCurrentLevelEditingViewportClient->EngineShowFlags;
+    Flags.SetSingleFlag(FlagIndex, bEnabled);
+    GCurrentLevelEditingViewportClient->Invalidate();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("flag"), FlagName);
+    Result->SetBoolField(TEXT("enabled"), bEnabled);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — console: wait_for_async_compile + dismiss_modal ───────
+//
+// finalize_migration (#39 in the catalog) is known to block on mesh + shader
+// compilation kicked off by migrate_assets. The async-compile wait lets
+// callers explicitly drain the queue before proceeding, with a timeout so
+// we don't deadlock if something jams. The modal-dismiss helper closes any
+// transient editor popup that landed during a sync command — typically the
+// "Importing..." progress window that lingers after finalize completion.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params)
+{
+    // Optional timeout — default 60 s, the longest reasonable wait for an
+    // editor mutation to complete shader+mesh compile.
+    double TimeoutSeconds = 60.0;
+    Params->TryGetNumberField(TEXT("timeout_seconds"), TimeoutSeconds);
+    if (TimeoutSeconds <= 0.0) TimeoutSeconds = 60.0;
+
+    const double StartSeconds = FPlatformTime::Seconds();
+    int32 LoopCount = 0;
+
+    // Tick the engine inside the wait loop so async compile actually makes
+    // progress. FAssetCompilingManager + GShaderCompilingManager both feed
+    // off the game thread's tick — without it they'd never finish.
+    while (true)
+    {
+        const int32 Remaining =
+            (GShaderCompilingManager ? GShaderCompilingManager->GetNumRemainingJobs() : 0) +
+            FAssetCompilingManager::Get().GetNumRemainingAssets();
+        if (Remaining == 0)
+        {
+            TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+            Result->SetNumberField(TEXT("elapsed_seconds"), FPlatformTime::Seconds() - StartSeconds);
+            Result->SetNumberField(TEXT("iterations"), LoopCount);
+            Result->SetBoolField(TEXT("success"), true);
+            return Result;
+        }
+
+        const double Elapsed = FPlatformTime::Seconds() - StartSeconds;
+        if (Elapsed > TimeoutSeconds)
+        {
+            TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+            Result->SetNumberField(TEXT("elapsed_seconds"), Elapsed);
+            Result->SetNumberField(TEXT("iterations"), LoopCount);
+            Result->SetNumberField(TEXT("remaining_jobs"), Remaining);
+            Result->SetBoolField(TEXT("timed_out"), true);
+            Result->SetBoolField(TEXT("success"), false);
+            Result->SetStringField(TEXT("error"),
+                FString::Printf(TEXT("Timed out after %.1fs with %d jobs still pending"),
+                    Elapsed, Remaining));
+            return Result;
+        }
+
+        // Drive the compile pumps. FinishAllCompilation is blocking but
+        // sliced — it returns when its internal slice ends, not when ALL
+        // work finishes. Loop wraps it in the timeout guard.
+        FAssetCompilingManager::Get().ProcessAsyncTasks();
+        if (GShaderCompilingManager)
+        {
+            GShaderCompilingManager->ProcessAsyncResults(false, false);
+        }
+        FPlatformProcess::Sleep(0.1f);
+        LoopCount++;
+    }
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDismissModalDialog(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!FSlateApplication::IsInitialized())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Slate not initialized"));
+    }
+
+    FSlateApplication& Slate = FSlateApplication::Get();
+    int32 DismissedCount = 0;
+
+    // Best-effort dismiss — popup menus, hover tooltips, then any open
+    // modal windows. Modal windows in UE are SWindow instances that
+    // `Slate.GetActiveTopLevelWindow()` reports. We close them via
+    // RequestDestroyWindow which respects the window's close-confirmation
+    // logic (won't accidentally drop unsaved changes from a save dialog).
+    Slate.DismissAllMenus();
+    DismissedCount++;  // count the menu dismiss as one action even if nothing was up
+
+    TArray<TSharedRef<SWindow>> Windows = Slate.GetTopLevelWindows();
+    for (const TSharedRef<SWindow>& W : Windows)
+    {
+        if (W->IsModalWindow())
+        {
+            Slate.RequestDestroyWindow(W);
+            DismissedCount++;
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("dismissed_count"), DismissedCount);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — read counterpart: get_actor_transform ─────────────────
+//
+// Symmetry with set_actor_transform. Returns location/rotation/scale as a
+// single payload so tight loops don't need three get_actor_property calls.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    AActor* Target = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* A : AllActors)
+    {
+        if (A && A->GetActorLabel() == ActorName) { Target = A; break; }
+    }
+    if (!Target)
+    {
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetName() == ActorName) { Target = A; break; }
+        }
+    }
+    if (!Target)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    auto MakeVec = [](const FVector& V) {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(V.X));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Y));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Z));
+        return Arr;
+    };
+    auto MakeRot = [](const FRotator& R) {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Pitch));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Yaw));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Roll));
+        return Arr;
+    };
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), Target->GetActorLabel());
+    Result->SetStringField(TEXT("internal_name"), Target->GetName());
+    Result->SetArrayField(TEXT("location"), MakeVec(Target->GetActorLocation()));
+    Result->SetArrayField(TEXT("rotation"), MakeRot(Target->GetActorRotation()));
+    Result->SetArrayField(TEXT("scale"), MakeVec(Target->GetActorScale3D()));
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

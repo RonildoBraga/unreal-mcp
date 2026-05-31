@@ -9,13 +9,7 @@
 
 </div>
 
-> **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. Adds:
->
-> - **UE 5.7 compatibility patches** (`ANY_PACKAGE` removal in UE 5.5+, `BufferSize` name collision with `TCHAR_TO_UTF8` internals — see `CHANGELOG.md`)
-> - **UMG endpoint extensions** (Phase 5.3) for HUD-style widget work
-> - **Sprint 1 + Sprint 2** (v0.2.0 – v0.7.0): asset management, editor state, level management, asset migration, materials, outliner — ~32 new tools
-> - **v0.7.4 – v0.7.7:** dotted-path property traversal (component + struct hops + Vector4), viewport mode control, screenshot redraw fix, async-compile introspection
-> - **v0.7.9 – v0.7.11:** `PostEditChangeProperty` broadcast (writes actually affect the renderer), generic `spawn_actor` UClass lookup, `FArrayProperty` walker, `set_static_mesh_material`, `get_actor_property` read counterpart, **PIE control** (`start_pie` / `stop_pie` / `pie_get_player` / `pie_set_player` / `pie_apply_movement` / `pie_screenshot`) for autonomous walkability verification
+> **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. Adds UE 5.7 compatibility, ~100 new tools across actors / assets / blueprints / UMG / levels / materials / outliner / project settings, a generalized object-property reflection layer (`get/set_object_property` on any UObject), and PIE-driven self-verification. See `CHANGELOG.md` for the per-release history.
 >
 > Original upstream remains MIT-licensed; this fork preserves the license and attribution.
 

@@ -197,7 +197,6 @@ namespace
 				TEXT("get_current_level"),
 				TEXT("open_level"),
 				TEXT("save_current_level"),
-				TEXT("save_all_dirty"),
 			});
 
 			RegBatch<FUnrealMCPMaterialCommands>({

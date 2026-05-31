@@ -6,16 +6,14 @@
 /**
  * Handler class for Level Management MCP commands.
  *
- * Sprint 1 partial — 4 tools covering the minimum loop: know what level
- * you're in, switch to a different one, save the current state, batch-save
- * everything dirty. Save-with-built-data + create_level + streaming-sublevel
- * support come in Sprint 3.
+ * Minimum loop: know what level you're in, switch to a different one,
+ * save the current state. Save-with-built-data + create_level +
+ * streaming-sublevel support come post-v0.8.0.
  *
  * Tools:
- *   get_current_level   — name + path of the loaded editor world
- *   open_level          — load a level by /Game/ path
- *   save_current_level  — save the currently loaded level
- *   save_all_dirty      — batch-save every dirty level + content package
+ *   get_current_level   -- name + path of the loaded editor world
+ *   open_level          -- load a level by /Game/ path
+ *   save_current_level  -- save the currently loaded level
  */
 class UNREALMCP_API FUnrealMCPLevelCommands
 {
@@ -29,5 +27,4 @@ private:
     TSharedPtr<FJsonObject> HandleGetCurrentLevel(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleOpenLevel(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSaveCurrentLevel(const TSharedPtr<FJsonObject>& Params);
-    TSharedPtr<FJsonObject> HandleSaveAllDirty(const TSharedPtr<FJsonObject>& Params);
 };

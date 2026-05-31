@@ -4,14 +4,11 @@ Basic level lifecycle: know what's loaded, switch levels, save changes.
 Level creation, World Partition queries, and streaming-sublevel management
 come post-v0.8.0.
 
-Tool surface (4 tools):
+Tool surface (3 tools):
 
     get_current_level     name + path of the loaded editor world
     open_level            load a level by /Game/ path
     save_current_level    save the currently loaded level
-    save_all_dirty        batch-save every dirty level + content package
-                          (slated for deletion in v0.8.0 Day 5 cleanup —
-                          never called by any current workflow)
 
 Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
 TCP to the C++ plugin and returns the response. C++ side in
@@ -67,17 +64,6 @@ def register_level_tools(mcp: FastMCP):
         """Save the currently-loaded level.
 
         Returns: {"success": bool}
-        """
-
-    @unreal_tool(mcp)
-    def save_all_dirty(ctx: Context) -> Dict[str, Any]:
-        """Save every dirty level and content package in the project.
-
-        Equivalent to UE's "Save All" button. UE handles save conflicts in
-        its own UI (e.g. if source control is in the way); this tool only
-        confirms the call was dispatched, not the outcome of every save.
-
-        Returns: {"success": bool, "note": "..."}
         """
 
     logger.info("Level tools registered successfully")

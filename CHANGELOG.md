@@ -4,6 +4,222 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.8.0] — 2026-05-31 — architectural redesign + capability sprint
+
+The biggest release since the fork. Splits into two arcs:
+
+1. **Bridge + reflection refactor (Day 1–2)** — the dispatch layer goes
+   from a 130-line if/else chain in `UnrealMCPBridge.cpp` to a
+   self-registering command map (`FMCPRegistry` + `REGISTER_MCP_COMMAND`
+   macro), property traversal lifts out of `CommonUtils` into a
+   dedicated `Reflection/PropertyWalker` module, class + object lookup
+   gain their own `ClassLookup` / `ObjectLookup` units, the wire format
+   flips to strict `{success: bool, error?: "...", ...payload}`, the
+   Python side absorbs all per-wrapper connection / error boilerplate
+   into a single `@unreal_tool` decorator (78 wrappers converted).
+2. **Capability sprint (Day 3–4)** — 24 new MCP commands closing the
+   §6.3 priority list: selection write side, paged actor enumeration,
+   batch mutations, generalized object-property access, world settings
+   convenience, Content Browser navigation, static mesh inspection,
+   viewport framing + show-flag toggles, async-compile wait + modal
+   dismiss, INI editing, transform + component property read counterparts.
+
+Cold-start auto-registration: **78 → 101 commands.** Net source delta:
+**+5500 LOC added, ~1100 LOC dead code deleted**, all dispatched through
+~30 LOC of `FMCPRegistry::Dispatch` + a file-scope `FAutoRegistrar` that
+survives Live Coding patches.
+
+### Foundations (Day 1–2)
+
+- **`FMCPRegistry` + `REGISTER_MCP_COMMAND`** — dispatch is now a TMap
+  lookup, not an if/else chain. New commands take one line in the
+  registration file. Registrations live in `MCPRegistrations.cpp`'s
+  file-scope `static FAutoRegistrar GAutoRegistrar` whose constructor
+  runs at every DLL load (initial + Live Coding patch reload).
+- **`MCPParams` + `MCPResponse`** — typed param access + strict-shape
+  success/error builders. Every response now matches
+  `{success: bool, error?: "...", ...payload}` with NO envelope. Tools
+  that previously returned `{status: "success", result: {...}}` now
+  return their payload directly.
+- **`Reflection/PropertyWalker`** — lifted from `CommonUtils.cpp`. Same
+  code, dedicated home. `FUnrealMCPCommonUtils::WalkPropertyPath` /
+  `SetPropertyAtTarget` / `GetPropertyAtTarget` are thin inline forwarders
+  for compat. `FUnrealMCPCommonUtils::SetObjectProperty` (the v0.7.4-era
+  primitive used by blueprint commands) collapses from a 350-line
+  duplicate FProperty type switch to a 12-line wrapper over
+  `WalkPropertyPath` + `SetPropertyAtTarget` (saved ~480 LOC).
+- **`Reflection/ClassLookup`** — name → `UClass*` resolution. Lifted from
+  v0.7.10 `spawn_actor`'s inline path resolution; now used by
+  `spawn_actor`, `find_actors`, asset class filters, and class default
+  object lookups.
+- **`Reflection/ObjectLookup`** — the §5 leverage move. Resolves a
+  free-form target string to a `UObject*`:
+    1. `/Game/-prefixed` path → asset load
+    2. `/Script/-prefixed` path → engine class or CDO
+    3. Actor display label / internal name → actor in editor world
+  Backs the new generalized `get/set_object_property` plus the
+  `WorldSettings` convenience.
+- **`@unreal_tool` decorator** (Python) — replaces ~390 LOC of repeated
+  connect/send/error boilerplate across the 78 wrappers. Function body
+  becomes docstring-only; signature → wire payload by name; `OMIT` /
+  `None` defaults drop from the params.
+- **`recompile_live`** — programmatic Live Coding rebuild (same effect
+  as Ctrl+Alt+F11). Closes the autonomous build-test loop for handler-
+  body edits. (Adding new command names still requires a UBT base-DLL
+  rebuild while the editor is closed — static initializers in patch DLLs
+  don't re-run on in-place DLL patches.)
+
+### New capability (Day 3–4)
+
+24 new MCP commands closing the §6.3 priority list:
+
+**Selection write side (#1, 3 new + completes the get/set/clear/focus quartet):**
+
+- **`set_selected_actors(names)`** — replaces selection by display label or
+  internal name. Two-pass lookup. Returns `selected_count` (post-state
+  authoritative — counts actors UE actually selected, since `WorldSettings`
+  and other special actors silently resist multi-select), `requested_count`,
+  `missing`, `rejected`.
+- **`clear_selection()`** — `SelectNone` with `bNoteSelectionChange=true`.
+- **`focus_selected_actors()`** — equivalent of F-key. Errors when nothing
+  is selected.
+
+**Paged enumeration (#2):**
+
+- **`find_actors(pattern?, class_filter?, folder?, limit=200, offset=0)`** —
+  replaces `get_actors_in_level` for any caller that doesn't want the full
+  scene dump. On RomanCave (~3000 actors), `get_actors_in_level` returns
+  ~744 KB; this returns a paged slice. Class filter via `ClassLookup`,
+  folder is a prefix match, name pattern checks both display + internal
+  names. Returns `actors`, `count`, `total`, `offset`, `limit`.
+
+**Batch mutations (#3) — single round-trip RomanCave-style placement:**
+
+- **`spawn_actor_batch(actors)`** — accepts a list of spawn descriptors,
+  dispatches each through `HandleSpawnActor`, per-item error reporting.
+- **`delete_actor_batch(names)`** — pre-built label + internal-name maps
+  for O(1) lookup per delete.
+- **`move_actor_to_folder_batch(moves)`** — list of `{name, folder_path}`.
+
+**Generalized object access (#5):**
+
+- **`get_object_property(target, path)`** — read any UObject's property
+  by `ObjectLookup`-resolved target + dotted path.
+- **`set_object_property(target, path, value)`** — write side. Broadcasts
+  `PostEditChangeProperty` on the owning UObject so the editor refreshes.
+
+**World settings convenience (#4, Python-only over #5):**
+
+- **`get_world_settings(path?)`** — pins target to `"WorldSettings"`. Without
+  path, falls back to `get_actor_properties` for a full dump.
+- **`set_world_settings(path, value)`** — pins target. Closes the per-level
+  GameMode-override-hides-default footgun documented in Lauder's project
+  memory `feedback_unreal_level_gamemode_override_hides_default.md`.
+
+**Content Browser cooperation (#6):**
+
+- **`focus_in_browser(asset_path)`** — `SyncBrowserToAssets`, scroll +
+  highlight. Returns `asset_path` + `asset_class`.
+- **`navigate_to_folder(folder_path)`** — `SyncBrowserToFolders`. Bare names
+  get `/Game/` prefix auto-added.
+- **`open_in_editor(asset_path)`** — `UAssetEditorSubsystem::OpenEditorForAsset`.
+  Right editor for the asset class (Material Editor, BP Editor, etc.).
+
+**Static mesh inspection (#7):**
+
+- **`static_mesh_get_info(asset_path)`** — pre-placement query. Returns
+  local-space bounds (`center`, `extent`, `size`, `min`, `max`), material
+  slot list with current default assignments, LOD count.
+
+**Viewport (#8):**
+
+- **`frame_actor(name)`** — `MoveViewportCamerasToActor`. Equivalent of F-key
+  on a single actor, no `set_selected_actors` detour.
+- **`set_show_flag(flag, enabled)`** — `FEngineShowFlags::FindIndexByName` +
+  `SetSingleFlag`. **Gotcha:** `flag` is the C++ code name, not the editor
+  display label — e.g. UI shows "Sprites", code symbol is "BillboardSprites".
+  Common code names: `BillboardSprites`, `Bounds`, `Grid`, `Lighting`,
+  `PostProcessing`, `Game`, `Atmosphere`, `Fog`.
+
+**Console-bridge migration unblockers (#9):**
+
+- **`wait_for_async_compile(timeout_seconds=60)`** — blocks until
+  `GShaderCompilingManager` + `FAssetCompilingManager` drain. Ticks 100 ms
+  inner loop. Addresses the `finalize_migration` races mesh compile issue
+  (task #40 in project memory).
+- **`dismiss_modal_dialog()`** — `FSlateApplication::DismissAllMenus` +
+  scans top-level windows for `IsModalWindow()` + `RequestDestroyWindow`.
+  Best-effort; reports `dismissed_count`.
+
+**Bug fix (#10):**
+
+- **`pie_screenshot` Python unwrap fix** — now mirrors `take_screenshot`'s
+  pattern: validates `path` exists on disk, returns a structured success
+  dict with `path` + `size_bytes` + dimensions when `Image` content type
+  is unavailable instead of leaking the raw bridge response.
+
+**INI editing (#11):**
+
+- **`get_ini(file, section, key?)`** — `GConfig.GetString` for single key,
+  `GConfig.GetSection` + split-on-`=` for full section dump. Returns
+  `pairs` dict on section dump.
+- **`set_ini(file, section, key, value)`** — `GConfig.SetString` +
+  `GConfig.Flush(preserve_others=true)`. Live in current editor AND
+  persisted to disk. Returns `prior_value` + `created` bool.
+
+**Read counterparts (#12):**
+
+- **`get_actor_transform(name)`** — single-payload read of
+  `location` + `rotation` + `scale`. Faster than three `get_actor_property`
+  calls.
+- **`get_component_property(actor, component, path)`** — Python-only thin
+  shim. Composes `<component>.<path>` and dispatches to
+  `get_object_property`.
+- **`get_static_mesh_material(actor, slot_index=0)`** — Python-only thin
+  shim. Reads `StaticMeshComponent.OverrideMaterials.{slot}`.
+
+### Hard deletions
+
+- `FUnrealMCPCommonUtils::SetObjectProperty` duplicate FProperty switch
+  (~480 LOC) — collapsed to a 12-line wrapper over `FPropertyWalker`.
+- `UnrealMCPBridge.cpp` if/else dispatch chain (~130 LOC) — replaced by
+  `FMCPRegistry::Dispatch`.
+- `level_tools::save_all_dirty` (~50 LOC across C++ + Python + headers
+  + registration) — never called by any current workflow.
+- `info()` prose prompt (~30 LOC) — replaced by a 10-line pointer to
+  `tools/list`. The authoritative tool catalog is what the LLM discovers
+  via the MCP `tools/list` request; keeping a parallel prose summary
+  drifted out of date almost immediately.
+- README "Fork notice" multi-bullet enumeration (~12 LOC) — collapsed to
+  a single-paragraph pointer at CHANGELOG.md.
+- Per-wrapper Python connection/error boilerplate (~390 LOC × 78 wrappers
+  is misleading — total was ~390 LOC actually) — absorbed by
+  `@unreal_tool` decorator.
+- Compat shims in `unreal_mcp_server.send_command()` that translated the
+  old `{status, result}` envelope.
+
+### Breaking changes
+
+Every response now uses the strict `{success: bool, error?: "...", ...payload}`
+wire format. Wrappers that previously read `.message` need `.error`. Callers
+checking `.status == "success"` need `.success == true`.
+
+`get_actors_in_level` is deprecated in favor of `find_actors`. The old
+command still works (no hard removal in this release) but the per-actor
+payload is the legacy v0.7.x shape — `find_actors` returns the v0.8.0
+`{name, internal_name, class, folder_path, location}` shape used by
+`get_selected_actors` and the other new tools.
+
+### Validation
+
+- Day 3-4 stacked integration smoke: **65/67 assertions pass** against
+  L_Base (the 2 fails surfaced the `set_show_flag` display-name vs.
+  code-name UX gotcha, fixed in the same release in the docstring + error
+  hint).
+- Full UBT rebuild of `LauderEditor` passes after every commit in the
+  series.
+- Cold-start auto-registration: 78 → 101 commands logged at editor start.
+
 ## [0.7.12] — 2026-05-31 — get_selected_actors
 
 User-requested patch surfaced during RomanCave (Megascans Fab showcase)

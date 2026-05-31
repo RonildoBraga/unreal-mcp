@@ -1,6 +1,6 @@
 [project]
 name = "unreal-mcp"
-version = "0.8.0-dev"
+version = "0.8.1-dev"
 description = "Unreal MCP Server: A server for Unreal Engine integration via the Model Context Protocol (MCP)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,19 @@ dependencies = [
   "pydantic>=2.6.1",
   "requests"
 ]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0"
+]
+
+[tool.pytest.ini_options]
+# Tests live in `server/tests/` and require the editor running with the
+# UnrealMCP plugin listening on TCP 55557. See server/tests/README.md.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]

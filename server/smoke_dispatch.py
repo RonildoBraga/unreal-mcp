@@ -22,9 +22,24 @@ How it works:
    the bridge's "Unknown command: ..." error from
    ``MCPBridge.cpp`` / ``MCPRegistry.cpp``.
 
+Windows TCP race classification (hardened in v0.8.1 per Codex review):
+
+Some handlers reliably hit a Windows TCP RST-after-FIN race: the editor
+sends a small payload (typically a fast-error response, < 100 bytes) and
+immediately closes the socket. Windows may discard the buffered receive
+data instead of delivering it to the client, so ``recv()`` times out
+even though the server-side write succeeded.
+
+We cross-check timeouts against the editor's Output Log: if the log shows
+"Sending response: ..." for the command in the last 60 s, classify the
+timeout as DISPATCH-OK (editor-side ran fine, just lost in transit). If
+the log shows no response, classify as UNCONFIRMED (handler may have
+hung) and surface as a real failure.
+
 Exit codes:
     0 — every registered command dispatched to a real handler.
-    1 — at least one command came back "Unknown command".
+    1 — at least one command came back "Unknown command" OR timed out
+        without a corresponding editor-log entry.
 
 Run with the editor open and the MCP server listening on TCP 55557:
 
@@ -33,8 +48,13 @@ Run with the editor open and the MCP server listening on TCP 55557:
 """
 
 import json
+import os
+import re
 import socket
 import sys
+import time
+from pathlib import Path
+from typing import Optional
 
 # Add cwd to path so we can import the server module when run as a script.
 sys.path.insert(0, ".")
@@ -91,6 +111,75 @@ SKIP_EMPTY = {
 }
 
 
+# ─── Editor-log cross-check for timeout classification ──────────────────────
+
+
+def find_editor_log() -> Optional[Path]:
+    """Locate the editor's current Output Log.
+
+    Walks up from cwd looking for a sibling Lauder/Saved/Logs/Lauder.log (the
+    canonical Lauder project), and falls back to a UNREAL_MCP_LOG env var
+    that callers can set explicitly. Returns None if not found — in which
+    case the smoke falls back to its pre-hardening behavior (treat
+    timeouts as DISPATCHED but flagged).
+    """
+    explicit = os.environ.get("UNREAL_MCP_LOG")
+    if explicit:
+        p = Path(explicit)
+        return p if p.exists() else None
+
+    # Lauder canonical location.
+    candidate = Path("C:/Users/ronildo/Developer/lauder3/Lauder/Saved/Logs/Lauder.log")
+    if candidate.exists():
+        return candidate
+
+    # Walk upwards looking for a .uproject with a Saved/Logs/ sibling.
+    here = Path.cwd().resolve()
+    for parent in (here, *here.parents):
+        for uproject in parent.rglob("*.uproject"):
+            log = uproject.parent / "Saved" / "Logs" / (uproject.stem + ".log")
+            if log.exists():
+                return log
+    return None
+
+
+def editor_logged_response_for(log_path: Path, command: str, since_seconds: float = 60.0) -> bool:
+    """Return True if the editor log shows "Sending response" for `command`
+    within the last `since_seconds`.
+
+    We don't try to parse the log timestamp — too brittle across UE versions.
+    Instead we read the tail (last ~5000 lines, ~500 KB) and look for the
+    pattern `Received: {"type": "<command>", ...}` followed by a `Sending
+    response` line. Either match is sufficient — the response line is what
+    proves the handler completed its synchronous work.
+    """
+    try:
+        # Read the last 500 KB so we don't load multi-MB editor logs.
+        size = log_path.stat().st_size
+        with log_path.open("rb") as fh:
+            if size > 500_000:
+                fh.seek(size - 500_000)
+                # Drop the (probably partial) first line.
+                fh.readline()
+            tail = fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+
+    received_pat = re.compile(
+        r'MCPServerRunnable: Received:\s*\{"type":\s*"' + re.escape(command) + r'"'
+    )
+    response_pat = re.compile(
+        r'MCPServerRunnable: Sending response'
+    )
+    # Look for the LAST occurrence of "Received: <command>" and then
+    # verify a Sending response follows shortly after.
+    received_positions = [m.end() for m in received_pat.finditer(tail)]
+    if not received_positions:
+        return False
+    last_received = received_positions[-1]
+    return bool(response_pat.search(tail[last_received : last_received + 4000]))
+
+
 def collect_wire_commands():
     """Return the set of wire-command names the smoke should ping."""
     import unreal_mcp_server  # noqa: WPS433 — intentional late import
@@ -110,23 +199,32 @@ def main() -> int:
     commands = collect_wire_commands()
     print(f"=== unreal-mcp dispatch smoke ({len(commands)} commands) ===\n")
 
-    unknown = []     # real failures — dispatch didn't reach a handler
-    timed_out = []   # editor sent a response we couldn't read (Windows TCP race)
+    log_path = find_editor_log()
+    if log_path:
+        print(f"  editor log for timeout cross-check: {log_path}")
+    else:
+        print("  no editor log located -- timeouts will be flagged as UNCONFIRMED")
+    print()
+
+    unknown = []      # real failures — dispatch didn't reach a handler
+    confirmed = []    # editor logged a response but the client recv timed out
+    unconfirmed = []  # timeout AND editor log doesn't show a response: real fail
     ok = 0
 
     for cmd in commands:
         try:
             response = call(cmd)
         except (TimeoutError, socket.timeout) as e:
-            # Windows-specific TCP RST-after-FIN race: when the editor sends
-            # a small payload (e.g. a fast error response) and immediately
-            # closes the socket, the client's recv() can time out before
-            # delivering the buffered data. The editor log confirms the
-            # handler ran and wrote a valid response — dispatch was correct.
-            # This is NOT a dispatch failure (no "Unknown command" returned);
-            # the architecture goal (§8 Q5: catch unwired commands) is met.
-            print(f"  TIMEOUT    {cmd}: {e} (handler dispatched — check editor log)")
-            timed_out.append(cmd)
+            # Windows TCP RST-after-FIN race. Cross-check the editor log —
+            # if the handler ran and wrote a response, this is a transport
+            # artifact (CONFIRMED). If the editor never logged a response,
+            # the handler hung or never registered (UNCONFIRMED — real bug).
+            if log_path and editor_logged_response_for(log_path, cmd):
+                print(f"  CONFIRMED  {cmd}: {e} (editor log shows handler response)")
+                confirmed.append(cmd)
+            else:
+                print(f"  UNCONFIRM  {cmd}: {e} (NO editor log entry -- handler may have hung)")
+                unconfirmed.append(cmd)
             continue
         except OSError as e:
             print(f"  CONN-FAIL  {cmd}: {e}")
@@ -140,19 +238,27 @@ def main() -> int:
         else:
             ok += 1
 
-    total_dispatched = ok + len(timed_out)
-    print(f"\n=== {total_dispatched}/{len(commands)} dispatched, "
-          f"{len(timed_out)} timeouts, {len(unknown)} unknown ===")
+    total_dispatched = ok + len(confirmed)
+    print(
+        f"\n=== {total_dispatched}/{len(commands)} dispatched, "
+        f"{len(confirmed)} TCP-race confirmed, "
+        f"{len(unconfirmed)} unconfirmed, "
+        f"{len(unknown)} unknown ==="
+    )
     if unknown:
-        print("Unknown commands (dispatch failures — NEED FIXING):")
+        print("Unknown commands (dispatch failures -- NEED FIXING):")
         for cmd in unknown:
             print(f"  - {cmd}")
-        return 1
-    if timed_out:
-        print("Timeouts (Windows TCP race; editor-side dispatch confirmed):")
-        for cmd in timed_out:
+    if unconfirmed:
+        print("Unconfirmed timeouts (editor log shows no response -- NEED INVESTIGATION):")
+        for cmd in unconfirmed:
             print(f"  - {cmd}")
-    return 0
+    if confirmed:
+        print("Confirmed Windows TCP race (editor handled cleanly; transport artifact):")
+        for cmd in confirmed:
+            print(f"  - {cmd}")
+
+    return 1 if (unknown or unconfirmed) else 0
 
 
 if __name__ == "__main__":

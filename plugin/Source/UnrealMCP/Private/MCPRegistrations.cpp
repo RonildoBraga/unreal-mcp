@@ -31,7 +31,6 @@
 #include "Commands/UnrealMCPEditorCommands.h"
 #include "Commands/UnrealMCPBlueprintCommands.h"
 #include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPUMGCommands.h"
 #include "Commands/UnrealMCPAssetCommands.h"
 
 #include <initializer_list>
@@ -195,22 +194,7 @@ namespace
 
 			// outliner.* self-registers in Commands/UnrealMCPOutlinerCommands.cpp.
 
-			RegBatch<FUnrealMCPUMGCommands>({
-				TEXT("create_umg_widget_blueprint"),
-				TEXT("add_text_block_to_widget"),
-				TEXT("add_button_to_widget"),
-				TEXT("bind_widget_event"),
-				TEXT("set_text_block_binding"),
-				TEXT("add_widget_to_viewport"),
-				TEXT("add_widget_to_tree"),
-				TEXT("set_widget_text"),
-				TEXT("set_progress_bar_percent"),
-				TEXT("set_progress_bar_fill_color"),
-				TEXT("set_horizontal_box_slot_fill"),
-				TEXT("set_canvas_slot_anchor"),
-				TEXT("delete_widget_from_tree"),
-				TEXT("compile_widget_blueprint"),
-			});
+			// umg.* self-registers in Commands/UnrealMCPUMGCommands.cpp.
 
 			UE_LOG(LogTemp, Display,
 				TEXT("[UnrealMCP] %d commands auto-registered at DLL load (Day 2c-ii-a)"),

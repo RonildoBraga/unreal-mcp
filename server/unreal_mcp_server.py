@@ -316,18 +316,42 @@ Categories of tools available (use `tools/list` for the full catalog):
 
 ## Power tools worth knowing
 
-- `set_actor_property(name, "Component.Property", value)` — walks dotted
-  paths through component AND struct hops (so `Settings.AutoExposureBias`
-  on PostProcessVolume works), accepts JSON-typed values for vectors,
-  rotators, colors, and `/Game/`-prefixed asset path strings for object
-  references.
+- `set_actor_property(name, "Path.To.Property", value)` — walks dotted
+  paths through component, struct, AND array-index hops (so
+  `Settings.AutoExposureBias` on PostProcessVolume works, as does
+  `StaticMeshComponent.OverrideMaterials.0`). Accepts JSON-typed values
+  for vectors, rotators, Vector4, colors, and `/Game/`-prefixed asset
+  path strings for object references. Broadcasts PostEditChangeProperty
+  after each write so the renderer reflects the change.
+- `get_actor_property(name, "Path.To.Property")` — read counterpart.
+  Returns numeric/string/struct/object-path values matching the leaf type.
+- `spawn_actor(name, type, ...)` — generic UClass lookup. Accepts any
+  AActor subclass: short names like `"SkyAtmosphere"` resolve via
+  `/Script/Engine.<name>`; full paths also work.
 - `spawn_static_mesh_actor` — spawn + mesh assignment + optional Outliner
   folder placement in one call.
+- `set_static_mesh_material(name, material_path, slot)` — ergonomic
+  fix for "Megascans migration lost the parent material, swap slot 0".
 - `take_screenshot` — returns the PNG inline; forces a fresh viewport
   redraw so you actually see your most recent changes.
 - `read_output_log` — tail the editor log when a tool's behavior is
   surprising.
 - `get_async_compile_status` — poll before invoking heavy batches.
+
+## PIE control (v0.7.11) — autonomous walkability oracle
+
+- `start_pie` / `stop_pie` / `is_pie_active` — programmatic Play-In-Editor.
+- `pie_get_player` — reads pawn 0's `{location, rotation, velocity,
+  movement_mode, is_falling, is_movement_in_progress}`. The
+  walkability oracle: `is_falling=true` at a spot means no floor there.
+- `pie_set_player(location?, rotation?)` — teleport for spot-testing.
+- `pie_apply_movement(direction, duration, scale)` — fire-and-forget
+  "hold W for N seconds" equivalent. Sleep `duration` client-side
+  then `pie_get_player` to read the result.
+- `pie_screenshot(filename)` — in-game viewport, no editor gizmos.
+
+Pattern: `start_pie → pie_set_player(test_spot) → sleep → pie_get_player
+→ pie_apply_movement → sleep → pie_get_player → pie_screenshot → stop_pie`.
 
 ## Best practices
 

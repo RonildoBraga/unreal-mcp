@@ -12,9 +12,10 @@
 > **Fork notice.** This is a fork of [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp) maintained by [RonildoBraga](https://github.com/RonildoBraga) for the Lauder project. Adds:
 >
 > - **UE 5.7 compatibility patches** (`ANY_PACKAGE` removal in UE 5.5+, `BufferSize` name collision with `TCHAR_TO_UTF8` internals — see `CHANGELOG.md`)
-> - **Phase 5.3 UMG endpoint extensions** for HUD-style widget work
-> - **Sprint 1 (v0.2.0 + v0.3.0):** asset management, editor state, level management — ~18 new tools
-> - **Planned ~14 more tools in Sprint 2** (asset import + migrate, materials, outliner) — see `CHANGELOG.md` roadmap
+> - **UMG endpoint extensions** (Phase 5.3) for HUD-style widget work
+> - **Sprint 1 + Sprint 2** (v0.2.0 – v0.7.0): asset management, editor state, level management, asset migration, materials, outliner — ~32 new tools
+> - **v0.7.4 – v0.7.7:** dotted-path property traversal (component + struct hops + Vector4), viewport mode control, screenshot redraw fix, async-compile introspection
+> - **v0.7.9 – v0.7.11:** `PostEditChangeProperty` broadcast (writes actually affect the renderer), generic `spawn_actor` UClass lookup, `FArrayProperty` walker, `set_static_mesh_material`, `get_actor_property` read counterpart, **PIE control** (`start_pie` / `stop_pie` / `pie_get_player` / `pie_set_player` / `pie_apply_movement` / `pie_screenshot`) for autonomous walkability verification
 >
 > Original upstream remains MIT-licensed; this fork preserves the license and attribution.
 
@@ -24,17 +25,18 @@ Drive Unreal Engine 5.7 from any Model Context Protocol (MCP) client — Claude 
 
 | Category | Capabilities |
 |----------|-------------|
-| **Actors** | Spawn (generic + StaticMeshActor with mesh assignment), delete, set transforms + arbitrary properties via dotted paths (`PointLightComponent.Intensity`, `Settings.AutoExposureBias`), query |
+| **Actors** | Spawn (any `AActor` subclass by name — `SkyAtmosphere`, `ExponentialHeightFog`, custom Blueprint actors), `spawn_static_mesh_actor` with mesh assignment + Outliner folder, delete, transform, get/set arbitrary properties via dotted paths (`PointLightComponent.Intensity`, `Settings.AutoExposureBias`, `StaticMeshComponent.OverrideMaterials.0`), `set_static_mesh_material` convenience |
 | **Blueprints** | Create classes with custom components; add nodes; compile; spawn instances |
 | **UMG widgets** | Create widget BPs; add text/buttons; bind events; viewport |
 | **Editor state** | Viewport camera + mode (Lit/Unlit/Wireframe/…); inline-image screenshots; console commands; CVars; output log tail; async compile-queue status |
+| **PIE control** | `start_pie` / `stop_pie` / `is_pie_active`; read player pawn location + rotation + velocity + `movement_mode` + `is_falling`; teleport for spot-testing; fire-and-forget movement input for N seconds; in-game viewport screenshot — the autonomous walkability oracle |
 | **Levels** | Get/open/save current level; save all dirty |
-| **Assets** | List, search by class, dependency + referencer graph; move, delete, rename, duplicate, **migrate cross-project + finalize_migration ref-fixup, import** |
-| **Materials** | Create material instances; tune parameters; query parent + uses |
+| **Assets** | List, search by class, dependency + referencer graph; move, delete, rename, duplicate; **migrate cross-project + finalize_migration ref-fixup, generic import** |
+| **Materials** | Create material instances; tune parameters; query parent + uses; list instances of a parent |
 | **Outliner** | Get/create folders; move actors to folders; list actors by folder |
 | **Input** | Input action mapping creation |
 
-See `docs/tools/README.md` for the full v0.7.7 tool catalog (~69 tools).
+See `docs/tools/README.md` for the full v0.7.11 tool catalog (78 tools).
 
 ## Layout
 

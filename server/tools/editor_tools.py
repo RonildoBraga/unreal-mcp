@@ -250,6 +250,55 @@ def register_editor_tools(mcp: FastMCP):
             return {"success": False, "message": str(e)}
 
     @mcp.tool()
+    def set_static_mesh_material(
+        ctx: Context,
+        name: str,
+        material_path: str,
+        slot: int = 0,
+    ) -> Dict[str, Any]:
+        """Swap one material slot on a StaticMeshActor (v0.7.10).
+
+        Equivalent to dotted-path "StaticMeshComponent.OverrideMaterials.<slot>"
+        via set_actor_property, but this tool is the ergonomic path when the goal
+        is simply "the mesh's parent material was lost during migration, swap slot
+        0 for a known-good material instance". Calls
+        UStaticMeshComponent::SetMaterial under the hood, which handles
+        MarkRenderStateDirty internally so the scene refreshes.
+
+        Args:
+            name:          Actor name in the current level.
+            material_path: /Game/-prefixed object path of the material or
+                           material instance (e.g.
+                           "/Game/Megascans/.../MI_RomanColumn_01.MI_RomanColumn_01").
+            slot:          Material slot index. Default 0.
+
+        Returns:
+            {"actor": ..., "slot": int, "material_path": ..., "success": bool}
+            Errors on missing actor, non-StaticMeshActor, unloadable material,
+            or out-of-range slot.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            response = unreal.send_command("set_static_mesh_material", {
+                "name": name,
+                "material_path": material_path,
+                "slot": slot,
+            })
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"Error setting static mesh material: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
     def delete_actor(ctx: Context, name: str) -> Dict[str, Any]:
         """Delete an actor by name."""
         from unreal_mcp_server import get_unreal_connection
@@ -305,21 +354,68 @@ def register_editor_tools(mcp: FastMCP):
     def get_actor_properties(ctx: Context, name: str) -> Dict[str, Any]:
         """Get all properties of an actor."""
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-                
+
             response = unreal.send_command("get_actor_properties", {
                 "name": name
             })
             return response or {}
-            
+
         except Exception as e:
             logger.error(f"Error getting properties: {e}")
             return {}
+
+    @mcp.tool()
+    def get_actor_property(ctx: Context, name: str, property_name: str) -> Dict[str, Any]:
+        """Read a single property at a dotted path (v0.7.10 — read counterpart to set_actor_property).
+
+        Walks the same paths set_actor_property walks — FObjectProperty hops,
+        FStructProperty hops, FArrayProperty index hops — and returns the leaf
+        value serialized to JSON:
+
+        - Bool / Int / Float / Double / Byte  → number
+        - Str / Name / Enum                   → string
+        - Vector / Rotator / LinearColor / Color / Vector4 → list of components
+        - UObject* (StaticMesh, Material, ...) → object path string ("" if null)
+        - TArray                              → {kind: "Array", length, inner}
+
+        Useful for:
+          - Inspecting which mesh an actor uses (StaticMeshComponent.StaticMesh)
+          - Reading current light parameters before tuning (LightComponent.Intensity)
+          - Counting material slots (StaticMeshComponent.OverrideMaterials)
+
+        Args:
+            name:           Actor's display name in the current level.
+            property_name:  Dotted path, same syntax as set_actor_property.
+
+        Returns:
+            {"actor": ..., "property": ..., "value": <json>, "success": bool}
+            On error: {"success": false, "message": ...}
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            response = unreal.send_command("get_actor_property", {
+                "name": name,
+                "property_name": property_name,
+            })
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"Error reading actor property: {e}")
+            return {"success": False, "message": str(e)}
 
     @mcp.tool()
     def set_actor_property(
@@ -774,5 +870,226 @@ def register_editor_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"get_async_compile_status error: {e}")
             return {"error": str(e)}
+
+    # ─── v0.7.11 — PIE (Play-In-Editor) control + player state ────────────
+
+    @mcp.tool()
+    def start_pie(ctx: Context) -> Dict[str, Any]:
+        """Start a Play-In-Editor session (v0.7.11).
+
+        Equivalent to pressing Alt+P in the editor — uses the project's
+        configured play mode (Selected Viewport / Standalone / etc.) from
+        Editor Preferences. Returns immediately; the actual game-thread
+        spin-up is asynchronous.
+
+        Use the pie_get_player / pie_screenshot / pie_apply_movement tools
+        to drive and inspect the running session. Call stop_pie when done.
+
+        Returns:
+            {"success": bool, "already_active": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("start_pie", {})
+            return response or {"success": False, "message": "No response"}
+        except Exception as e:
+            logger.error(f"start_pie error: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def stop_pie(ctx: Context) -> Dict[str, Any]:
+        """End the active Play-In-Editor session.
+
+        Returns:
+            {"success": bool, "was_active": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("stop_pie", {})
+            return response or {"success": False, "message": "No response"}
+        except Exception as e:
+            logger.error(f"stop_pie error: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def is_pie_active(ctx: Context) -> Dict[str, Any]:
+        """Check whether a PIE session is currently running.
+
+        Returns:
+            {"active": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"active": False, "message": "Failed to connect to Unreal Engine"}
+            return unreal.send_command("is_pie_active", {}) or {"active": False}
+        except Exception as e:
+            logger.error(f"is_pie_active error: {e}")
+            return {"active": False, "message": str(e)}
+
+    @mcp.tool()
+    def pie_get_player(ctx: Context) -> Dict[str, Any]:
+        """Read the active PIE player pawn's state (v0.7.11).
+
+        Useful for walkability verification — after pie_apply_movement,
+        check movement_mode + is_falling + final location to confirm the
+        character actually landed where you expected.
+
+        Returns:
+            {
+              "location": [x, y, z],
+              "rotation": [pitch, yaw, roll],
+              "velocity": [vx, vy, vz],
+              "pawn_class": "...",
+              "movement_mode": "Walking" | "Falling" | "None" | ...,  (only if CharacterMovementComponent present)
+              "is_falling": bool,
+              "is_movement_in_progress": bool,
+              "success": bool
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("pie_get_player", {})
+            if not response:
+                return {"success": False, "message": "No response"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"pie_get_player error: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def pie_set_player(
+        ctx: Context,
+        location: Optional[List[float]] = None,
+        rotation: Optional[List[float]] = None,
+    ) -> Dict[str, Any]:
+        """Teleport the active PIE player pawn (v0.7.11).
+
+        Bypasses collision (TeleportPhysics). Useful for spot-testing
+        whether a specific position is walkable — drop the player there,
+        wait a tick, then pie_get_player to see if movement_mode became
+        Walking or stayed Falling.
+
+        Args:
+            location: [x, y, z] world cm. Omit to keep current location.
+            rotation: [pitch, yaw, roll] degrees. Omit to keep current.
+
+        Returns:
+            {"location": [..], "rotation": [..], "success": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {}
+            if location is not None:
+                params["location"] = location
+            if rotation is not None:
+                params["rotation"] = rotation
+            response = unreal.send_command("pie_set_player", params)
+            if not response:
+                return {"success": False, "message": "No response"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"pie_set_player error: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def pie_apply_movement(
+        ctx: Context,
+        direction: List[float],
+        duration: float = 1.0,
+        scale: float = 1.0,
+    ) -> Dict[str, Any]:
+        """Drive the PIE pawn forward in a direction for N seconds (v0.7.11).
+
+        Calls APawn::AddMovementInput each tick for the requested duration —
+        equivalent to holding a movement key. Fire-and-forget: returns
+        immediately, but the movement keeps running. Sleep at least
+        `duration` seconds client-side before reading pie_get_player to
+        see the result.
+
+        Args:
+            direction: [x, y, z] world-space direction. Normalized internally.
+                       E.g. [1, 0, 0] = +X (north), [0, 1, 0] = +Y (east).
+            duration:  How long to keep applying movement, in seconds.
+                       Clamped to [0.05, 30.0]. Default 1.0.
+            scale:     Input scale (1.0 = full speed). Default 1.0.
+
+        Returns:
+            {"direction": [..], "duration": float, "scale": float,
+             "note": "...", "success": bool}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("pie_apply_movement", {
+                "direction": direction,
+                "duration": duration,
+                "scale": scale,
+            })
+            if not response:
+                return {"success": False, "message": "No response"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"pie_apply_movement error: {e}")
+            return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def pie_screenshot(ctx: Context, filename: str = "pie_screenshot.png") -> Any:
+        """Capture a screenshot from the PIE game viewport (v0.7.11).
+
+        Different from take_screenshot — that one captures the editor's
+        active viewport which when PIE is running may show editor gizmos.
+        This captures the player's actual in-game view, no overlay.
+
+        Args:
+            filename: Output filename. Bare names land under
+                      <Project>/Saved/Screenshots/. Default
+                      "pie_screenshot.png".
+
+        Returns:
+            FastMCP Image content (inline PNG bytes) on success, else error dict.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("pie_screenshot", {"filename": filename})
+            if not response:
+                return {"success": False, "message": "No response"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            # Return inline image bytes if FastMCP supports it
+            path = response.get("path") if isinstance(response, dict) else None
+            if Image is not None and path:
+                try:
+                    return Image(path=path)
+                except Exception:
+                    pass
+            return response
+        except Exception as e:
+            logger.error(f"pie_screenshot error: {e}")
+            return {"success": False, "message": str(e)}
 
     logger.info("Editor tools registered successfully")

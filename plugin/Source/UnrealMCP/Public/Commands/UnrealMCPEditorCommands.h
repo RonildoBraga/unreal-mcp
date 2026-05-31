@@ -22,9 +22,11 @@ private:
     TSharedPtr<FJsonObject> HandleSpawnActor(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSpawnStaticMeshActor(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetStaticMeshActorMesh(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetStaticMeshMaterial(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleDeleteActor(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetActorTransform(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetActorProperties(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetActorProperty(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetActorProperty(const TSharedPtr<FJsonObject>& Params);
 
     // Blueprint actor spawning
@@ -46,4 +48,13 @@ private:
     TSharedPtr<FJsonObject> HandleSetViewportMode(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleReadOutputLog(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetAsyncCompileStatus(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.7.11 — PIE (Play-In-Editor) control for self-verification
+    TSharedPtr<FJsonObject> HandleStartPIE(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleStopPIE(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleIsPIEActive(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandlePIEGetPlayer(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params);
 };

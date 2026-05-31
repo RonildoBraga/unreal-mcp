@@ -242,9 +242,11 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("create_actor") ||
                      CommandType == TEXT("spawn_static_mesh_actor") ||
                      CommandType == TEXT("set_static_mesh_actor_mesh") ||
+                     CommandType == TEXT("set_static_mesh_material") ||
                      CommandType == TEXT("delete_actor") ||
                      CommandType == TEXT("set_actor_transform") ||
                      CommandType == TEXT("get_actor_properties") ||
+                     CommandType == TEXT("get_actor_property") ||
                      CommandType == TEXT("set_actor_property") ||
                      CommandType == TEXT("spawn_blueprint_actor") ||
                      CommandType == TEXT("focus_viewport") ||
@@ -257,7 +259,14 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("get_viewport_mode") ||
                      CommandType == TEXT("set_viewport_mode") ||
                      CommandType == TEXT("read_output_log") ||
-                     CommandType == TEXT("get_async_compile_status"))
+                     CommandType == TEXT("get_async_compile_status") ||
+                     CommandType == TEXT("start_pie") ||
+                     CommandType == TEXT("stop_pie") ||
+                     CommandType == TEXT("is_pie_active") ||
+                     CommandType == TEXT("pie_get_player") ||
+                     CommandType == TEXT("pie_set_player") ||
+                     CommandType == TEXT("pie_apply_movement") ||
+                     CommandType == TEXT("pie_screenshot"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }

@@ -4,6 +4,170 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.7.11] — 2026-05-31 — PIE control + player state + in-game screenshot (self-verification)
+
+User-requested patch (2026-05-31) after Phase 7.2 of lauder3 surfaced a
+walkability bug — Megascans Cobblestone meshes lost their collision
+geometry at scale 18, so the character fell straight through. User
+asked: "can you add an MCP feature where you can press play and
+navigate using WASD so you can test it yourself?"
+
+This release ships the verification loop: programmatic PIE start/stop,
+player pawn state read, fire-and-forget movement input for N seconds,
+and in-game viewport screenshot. With these, an MCP-driven workflow
+can validate scene changes end-to-end without needing the user to
+manually press Play and walk around.
+
+### New tools
+
+- **`start_pie()`** — Queues a play-session request using the project's
+  configured play mode (Editor Preferences). Returns
+  `{success, already_active}`. Returns immediately; PIE spin-up is
+  asynchronous, so wait a beat before driving the pawn.
+- **`stop_pie()`** — Calls `GEditor->RequestEndPlayMap()`. Returns
+  `{success, was_active}`.
+- **`is_pie_active()`** — Returns `{active: bool}` based on
+  `GEditor->PlayWorld`.
+- **`pie_get_player()`** — Reads pawn 0's `{location, rotation, velocity,
+  pawn_class}` plus, if a `UCharacterMovementComponent` is present,
+  `{movement_mode, is_falling, is_movement_in_progress}`. The
+  walkability oracle — `is_falling: true` after pie_set_player means
+  the spot has no floor.
+- **`pie_set_player(location?, rotation?)`** — Teleport via
+  `SetActorLocationAndRotation(..., TeleportPhysics)`. Bypasses
+  collision; intended for spot-testing positions.
+- **`pie_apply_movement(direction, duration=1.0, scale=1.0)`** —
+  Fire-and-forget movement input. Registers an `FTSTicker` lambda that
+  calls `AddMovementInput(direction, scale)` each tick for the
+  requested duration, then unregisters itself. Caller sleeps
+  `duration` seconds, then queries `pie_get_player` to read the
+  result. Equivalent to "hold W for N seconds" without per-tick MCP
+  round-trips.
+- **`pie_screenshot(filename)`** — Captures `PlayWorld->GetGameViewport()->Viewport`
+  with the v0.7.7 redraw-flush guard. Returns inline PNG so the LLM
+  sees what the player sees, not the editor view with gizmos.
+
+### Walkability oracle pattern
+
+```python
+start_pie()
+sleep(2)                                    # PIE spin-up
+pie_set_player(location=[0, 0, 100])        # drop player at test point
+sleep(0.3)
+state = pie_get_player()
+if state["is_falling"]:
+    print("Floor missing at this spot")
+else:
+    pie_apply_movement(direction=[0, -1, 0], duration=3.0)  # walk forward
+    sleep(3.5)
+    final = pie_get_player()
+    print(f"Walked {distance(state['location'], final['location'])}cm")
+    pie_screenshot("walk_test.png")
+stop_pie()
+```
+
+### Why this matters
+
+Solo-dev verification loop: changes to L_Base / L_Zone01 can now be
+self-validated by Claude without a human round-trip. Direct unblock for
+Phase 7.2 finish (verify cobblestone floor is walkable), Phase 7.3
+(verify L_Zone01 layout), and any future scene-level work. Future
+patches can layer named-action input (Enhanced Input mappings) and
+proper held-key simulation on top.
+
+Verified: full UBT rebuild of `LauderEditor` passes after the changes.
+
+## [0.7.10] — 2026-05-31 — Generic spawn + FArrayProperty walker + set_static_mesh_material + get_actor_property
+
+Four patches landing together. Phase 7.2 of lauder3 hit all four in the
+same iteration loop: the hub scene needed SkyAtmosphere (not in the spawn
+allowlist), the floor needed an OverrideMaterials slot swap to repair
+broken-parent magenta (no array-property walker), the obvious "fix the
+material on this actor" tool didn't exist, and there was no way to
+inspect mesh refs / material assignments / light parameters without
+restarting the editor (no `get_actor_property`).
+
+### Generic `spawn_actor` class lookup
+
+The v0.7.0 handler had a hardcoded if/else over 5 types: StaticMeshActor,
+PointLight, SpotLight, DirectionalLight, CameraActor. Everything else
+returned "Unknown actor type" — including SkyAtmosphere, SkyLight,
+ExponentialHeightFog, PostProcessVolume, Cameras with specific subclasses,
+GameMode subclasses, etc.
+
+Replaced with a UClass lookup that accepts three input shapes:
+
+- **Full path**: `"/Script/Engine.SkyAtmosphere"` — `LoadObject<UClass>` directly.
+- **Bare name**: `"SkyAtmosphere"` — tries `/Script/Engine.<name>` first, then
+  `/Script/UnrealEd.<name>`. Covers the vast majority of common types.
+- **Bare name outside Engine/UnrealEd**: falls back to `UClass::TryFindTypeSlow`
+  for everything else (CommonUI widgets, game-module actors, etc.).
+
+Resolved class is verified to be an `AActor` subclass before spawn. The
+single-call diff is ~30 lines, replacing 25 lines of if/else.
+
+### `FArrayProperty` hop in `WalkPropertyPath`
+
+Dotted-path traversal previously bailed at FArrayProperty: paths like
+`StaticMeshComponent.OverrideMaterials.0` errored with "Path segment
+'OverrideMaterials' is a FArrayProperty — not traversable". The walker now
+recognizes array hops, requires a numeric index as the next segment,
+descends via `FScriptArrayHelper::GetRawPtr(idx)`, and handles two outcomes:
+
+- **Index is the leaf** (last segment): the array's `Inner` FProperty becomes
+  the leaf property; the element address becomes the leaf address. Set via
+  the new `FPropertyTarget::LeafPropertyOverride` / `LeafAddressOverride`
+  fields. This is what unlocks `OverrideMaterials.0 = "/Game/.../MI.MI"`.
+- **Index continues into the element** (more segments after): if Inner is
+  FObjectProperty, follow the pointer to the next UObject; if FStructProperty,
+  treat the element address as a struct container. Allows paths like
+  `SomeArray.3.NestedStruct.Field`.
+
+PostEditChangeProperty broadcast (v0.7.9) fires on the array's owning
+UObject so the renderer picks up the change.
+
+### `set_static_mesh_material(name, material_path, slot=0)` tool
+
+Convenience tool for the most common reason anyone reaches into
+OverrideMaterials in the first place: a Megascans migration that lost a
+parent material reference, leaving the mesh painted in
+WorldGridMaterial magenta. Resolves the actor, casts to
+AStaticMeshActor, validates the slot is in range against
+`GetNumMaterials()`, and calls `UStaticMeshComponent::SetMaterial(slot,
+LoadObject<UMaterialInterface>(...))`. SetMaterial internally calls
+MarkRenderStateDirty, so the change appears immediately.
+
+### `get_actor_property(name, property_name)` tool
+
+Read counterpart to `set_actor_property`. Walks the same dotted paths
+(FObjectProperty hops, FStructProperty hops, FArrayProperty index hops via
+v0.7.10's new walker) and returns the leaf value serialized to a JSON
+node matching the type:
+
+- Numerics → number
+- Str / Name / Enum → string
+- Struct (Vector, Rotator, LinearColor, Color, Vector4) → array
+- Object reference → object path string ("" if null)
+- TArray → `{kind: "Array", length: N, inner: "..."}`
+
+Driven by a new `GetValueAtAddress` static helper that mirrors the
+v0.7.9 `SetValueAtAddress` shape, and a `GetPropertyAtTarget` public
+method on `FUnrealMCPCommonUtils`. Unblocks the obvious "what mesh does
+this actor have right now" and "what's the parent material of this
+broken slot" inspection workflows that previously required restarting
+the editor and clicking through Details panels.
+
+### Why this matters
+
+Phase 7.2 needs SkyAtmosphere to dismiss the sky warning, OverrideMaterials
+writes to repair broken Megascans floor refs, a convenient set-material
+tool because nobody wants to remember the full dotted path for the
+common case, and a property reader so debugging stops requiring
+context-switching to the editor UI. Four small patches, one rebuild,
+GT-parity sanctuary unlocked.
+
+Verified: full UBT rebuild of `LauderEditor` passes after the changes.
+
 ## [0.7.9] — 2026-05-31 — set_actor_property actually affects the scene + Vector4 + API consistency
 
 Three fixes shipped together because Phase 7.2 of lauder3 hit all three

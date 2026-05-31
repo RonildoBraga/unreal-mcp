@@ -1092,8 +1092,10 @@ bool FUnrealMCPCommonUtils::WalkPropertyPath(UObject* Root, const FString& Path,
     UObject* OwningObj     = Root;
 
     // Walk every segment except the last. Each non-leaf hop must be either
-    // FObjectProperty (traverse to inner UObject) or FStructProperty (compute
-    // inner struct address and update container type).
+    // FObjectProperty (traverse to inner UObject), FStructProperty (compute
+    // inner struct address and update container type), or FArrayProperty
+    // followed by a numeric index (v0.7.10 — unlocks OverrideMaterials.0
+    // and similar TArray<UMaterialInterface*> writes).
     for (int32 i = 0; i < Segments.Num() - 1; i++)
     {
         const FString& Segment = Segments[i];
@@ -1160,8 +1162,91 @@ bool FUnrealMCPCommonUtils::WalkPropertyPath(UObject* Root, const FString& Path,
             continue;
         }
 
+        if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(Prop))
+        {
+            // v0.7.10 — array hop. The next segment MUST be a numeric index
+            // (we don't support named lookup inside arrays). The element
+            // address becomes the new container — if Inner is FObjectProperty,
+            // we follow the pointer to the next UObject; if FStructProperty,
+            // we treat it as a struct container.
+            if (i + 1 >= Segments.Num())
+            {
+                OutErrorMessage = FString::Printf(
+                    TEXT("Array property '%s' is missing an index segment"), *Segment);
+                return false;
+            }
+            const FString& IdxSeg = Segments[i + 1];
+            if (!IdxSeg.IsNumeric())
+            {
+                OutErrorMessage = FString::Printf(
+                    TEXT("Array property '%s' expects a numeric index next, got '%s'"),
+                    *Segment, *IdxSeg);
+                return false;
+            }
+            const int32 Idx = FCString::Atoi(*IdxSeg);
+            FScriptArrayHelper Helper(ArrayProp, ArrayProp->ContainerPtrToValuePtr<void>(ContainerAddr));
+            if (Idx < 0 || Idx >= Helper.Num())
+            {
+                OutErrorMessage = FString::Printf(
+                    TEXT("Array '%s' index %d out of bounds (size %d)"),
+                    *Segment, Idx, Helper.Num());
+                return false;
+            }
+            void* ElementAddr = Helper.GetRawPtr(Idx);
+            FProperty* Inner = ArrayProp->Inner;
+
+            // If the array index segment is the SECOND-TO-LAST (so there's still
+            // one more segment after it), we're descending into the element to
+            // find a named leaf. Otherwise — index is the leaf — we hand the
+            // setter a direct address + the Inner FProperty to apply the value.
+            const bool bIndexIsFinalHop = (i + 1 == Segments.Num() - 1);
+            if (bIndexIsFinalHop)
+            {
+                OutTarget.LeafPropertyOverride = Inner;
+                OutTarget.LeafAddressOverride  = ElementAddr;
+                OutTarget.OwningObject         = OwningObj;
+                OutTarget.LeafPropertyName     = IdxSeg;
+                OutTarget.OuterPropertyName    = Segments[0];
+                // ContainerAddress / ContainerType irrelevant in override mode,
+                // but set them to something harmless so callers don't trip.
+                OutTarget.ContainerAddress     = ContainerAddr;
+                OutTarget.ContainerType        = ContainerType;
+                return true;
+            }
+
+            if (FObjectProperty* InnerObj = CastField<FObjectProperty>(Inner))
+            {
+                UObject* Next = InnerObj->GetObjectPropertyValue(ElementAddr);
+                if (!Next)
+                {
+                    OutErrorMessage = FString::Printf(
+                        TEXT("Array element '%s[%d]' is a null UObject reference"), *Segment, Idx);
+                    return false;
+                }
+                ContainerAddr = Next;
+                ContainerType = Next->GetClass();
+                OwningObj     = Next;
+            }
+            else if (FStructProperty* InnerStruct = CastField<FStructProperty>(Inner))
+            {
+                ContainerAddr = ElementAddr;
+                ContainerType = InnerStruct->Struct;
+            }
+            else
+            {
+                OutErrorMessage = FString::Printf(
+                    TEXT("Array element '%s[%d]' is a %s — can't descend further (need Object or Struct inner)"),
+                    *Segment, Idx, *Inner->GetClass()->GetName());
+                return false;
+            }
+
+            // Consume the index segment we just used.
+            i++;
+            continue;
+        }
+
         OutErrorMessage = FString::Printf(
-            TEXT("Path segment '%s' is a %s — not traversable (need FObjectProperty or FStructProperty)"),
+            TEXT("Path segment '%s' is a %s — not traversable (need FObjectProperty, FStructProperty, or FArrayProperty)"),
             *Segment, *Prop->GetClass()->GetName());
         return false;
     }
@@ -1179,22 +1264,29 @@ bool FUnrealMCPCommonUtils::SetPropertyAtTarget(const FPropertyTarget& Target,
                                                 const TSharedPtr<FJsonValue>& Value,
                                                 FString& OutErrorMessage)
 {
-    if (!Target.ContainerAddress || !Target.ContainerType)
-    {
-        OutErrorMessage = TEXT("Invalid target — null container");
-        return false;
-    }
+    // v0.7.10 — array-index leaves bypass the named lookup entirely.
+    FProperty* LeafProp = Target.LeafPropertyOverride;
+    void*      LeafAddr = Target.LeafAddressOverride;
 
-    FProperty* LeafProp = Target.ContainerType->FindPropertyByName(*Target.LeafPropertyName);
     if (!LeafProp)
     {
-        OutErrorMessage = FString::Printf(
-            TEXT("Leaf property '%s' not found on %s"),
-            *Target.LeafPropertyName, *Target.ContainerType->GetName());
-        return false;
-    }
+        if (!Target.ContainerAddress || !Target.ContainerType)
+        {
+            OutErrorMessage = TEXT("Invalid target — null container");
+            return false;
+        }
 
-    void* LeafAddr = LeafProp->ContainerPtrToValuePtr<void>(Target.ContainerAddress);
+        LeafProp = Target.ContainerType->FindPropertyByName(*Target.LeafPropertyName);
+        if (!LeafProp)
+        {
+            OutErrorMessage = FString::Printf(
+                TEXT("Leaf property '%s' not found on %s"),
+                *Target.LeafPropertyName, *Target.ContainerType->GetName());
+            return false;
+        }
+
+        LeafAddr = LeafProp->ContainerPtrToValuePtr<void>(Target.ContainerAddress);
+    }
     if (!SetValueAtAddress(LeafProp, LeafAddr, Value, OutErrorMessage))
     {
         return false;
@@ -1212,4 +1304,159 @@ bool FUnrealMCPCommonUtils::SetPropertyAtTarget(const FPropertyTarget& Target,
         Target.OwningObject->PostEditChangeProperty(ChangeEvent);
     }
     return true;
+}
+
+
+// v0.7.10 — read counterpart to SetValueAtAddress. Internal helper used by
+// GetPropertyAtTarget. Returns a JSON value matching the FProperty type, or
+// nullptr + OutErrorMessage on unsupported types.
+static TSharedPtr<FJsonValue> GetValueAtAddress(FProperty* Property, const void* PropertyAddr,
+                                                FString& OutErrorMessage)
+{
+    if (!Property || !PropertyAddr)
+    {
+        OutErrorMessage = TEXT("Null property or container in GetValueAtAddress");
+        return nullptr;
+    }
+    const FString PropertyName = Property->GetName();
+
+    if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Property))
+    {
+        return MakeShared<FJsonValueBoolean>(BoolProp->GetPropertyValue(PropertyAddr));
+    }
+    if (FIntProperty* IntProp = CastField<FIntProperty>(Property))
+    {
+        return MakeShared<FJsonValueNumber>(IntProp->GetPropertyValue(PropertyAddr));
+    }
+    if (FFloatProperty* FloatProp = CastField<FFloatProperty>(Property))
+    {
+        return MakeShared<FJsonValueNumber>(FloatProp->GetPropertyValue(PropertyAddr));
+    }
+    if (FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Property))
+    {
+        return MakeShared<FJsonValueNumber>(DoubleProp->GetPropertyValue(PropertyAddr));
+    }
+    if (FStrProperty* StrProp = CastField<FStrProperty>(Property))
+    {
+        return MakeShared<FJsonValueString>(StrProp->GetPropertyValue(PropertyAddr));
+    }
+    if (FNameProperty* NameProp = CastField<FNameProperty>(Property))
+    {
+        return MakeShared<FJsonValueString>(NameProp->GetPropertyValue(PropertyAddr).ToString());
+    }
+    if (FByteProperty* ByteProp = CastField<FByteProperty>(Property))
+    {
+        const uint8 V = ByteProp->GetPropertyValue(PropertyAddr);
+        if (UEnum* E = ByteProp->GetIntPropertyEnum())
+        {
+            return MakeShared<FJsonValueString>(E->GetNameStringByValue(V));
+        }
+        return MakeShared<FJsonValueNumber>(V);
+    }
+    if (FEnumProperty* EnumProp = CastField<FEnumProperty>(Property))
+    {
+        FNumericProperty* Numeric = EnumProp->GetUnderlyingProperty();
+        UEnum* E = EnumProp->GetEnum();
+        if (Numeric && E)
+        {
+            const int64 V = Numeric->GetSignedIntPropertyValue(PropertyAddr);
+            return MakeShared<FJsonValueString>(E->GetNameStringByValue(V));
+        }
+    }
+    if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
+    {
+        UScriptStruct* StructType = StructProp->Struct;
+        auto Pack3 = [](double X, double Y, double Z) {
+            TArray<TSharedPtr<FJsonValue>> Arr;
+            Arr.Add(MakeShared<FJsonValueNumber>(X));
+            Arr.Add(MakeShared<FJsonValueNumber>(Y));
+            Arr.Add(MakeShared<FJsonValueNumber>(Z));
+            return MakeShared<FJsonValueArray>(Arr);
+        };
+        auto Pack4 = [](double X, double Y, double Z, double W) {
+            TArray<TSharedPtr<FJsonValue>> Arr;
+            Arr.Add(MakeShared<FJsonValueNumber>(X));
+            Arr.Add(MakeShared<FJsonValueNumber>(Y));
+            Arr.Add(MakeShared<FJsonValueNumber>(Z));
+            Arr.Add(MakeShared<FJsonValueNumber>(W));
+            return MakeShared<FJsonValueArray>(Arr);
+        };
+
+        if (StructType == TBaseStructure<FVector>::Get())
+        {
+            const FVector& V = *static_cast<const FVector*>(PropertyAddr);
+            return Pack3(V.X, V.Y, V.Z);
+        }
+        if (StructType == TBaseStructure<FRotator>::Get())
+        {
+            const FRotator& R = *static_cast<const FRotator*>(PropertyAddr);
+            return Pack3(R.Pitch, R.Yaw, R.Roll);
+        }
+        if (StructType == TBaseStructure<FVector4>::Get())
+        {
+            const FVector4& V = *static_cast<const FVector4*>(PropertyAddr);
+            return Pack4(V.X, V.Y, V.Z, V.W);
+        }
+        if (StructType == TBaseStructure<FLinearColor>::Get())
+        {
+            const FLinearColor& C = *static_cast<const FLinearColor*>(PropertyAddr);
+            return Pack4(C.R, C.G, C.B, C.A);
+        }
+        if (StructType == TBaseStructure<FColor>::Get())
+        {
+            const FColor& C = *static_cast<const FColor*>(PropertyAddr);
+            return Pack4(C.R, C.G, C.B, C.A);
+        }
+
+        OutErrorMessage = FString::Printf(TEXT("Unsupported struct '%s' for read"),
+                                          *StructType->GetName());
+        return nullptr;
+    }
+    if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Property))
+    {
+        UObject* Obj = ObjProp->GetObjectPropertyValue(PropertyAddr);
+        return MakeShared<FJsonValueString>(Obj ? Obj->GetPathName() : FString());
+    }
+    if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property))
+    {
+        FScriptArrayHelper Helper(ArrayProp, PropertyAddr);
+        TSharedPtr<FJsonObject> ArrObj = MakeShared<FJsonObject>();
+        ArrObj->SetStringField(TEXT("kind"), TEXT("Array"));
+        ArrObj->SetNumberField(TEXT("length"), Helper.Num());
+        ArrObj->SetStringField(TEXT("inner"), ArrayProp->Inner->GetClass()->GetName());
+        return MakeShared<FJsonValueObject>(ArrObj);
+    }
+
+    OutErrorMessage = FString::Printf(TEXT("Unsupported property type for read: %s on %s"),
+                                      *Property->GetClass()->GetName(), *PropertyName);
+    return nullptr;
+}
+
+
+TSharedPtr<FJsonValue> FUnrealMCPCommonUtils::GetPropertyAtTarget(const FPropertyTarget& Target,
+                                                                  FString& OutErrorMessage)
+{
+    // Same override-vs-named-lookup dispatch as SetPropertyAtTarget.
+    FProperty* LeafProp = Target.LeafPropertyOverride;
+    const void* LeafAddr = Target.LeafAddressOverride;
+
+    if (!LeafProp)
+    {
+        if (!Target.ContainerAddress || !Target.ContainerType)
+        {
+            OutErrorMessage = TEXT("Invalid target — null container");
+            return nullptr;
+        }
+        LeafProp = Target.ContainerType->FindPropertyByName(*Target.LeafPropertyName);
+        if (!LeafProp)
+        {
+            OutErrorMessage = FString::Printf(
+                TEXT("Leaf property '%s' not found on %s"),
+                *Target.LeafPropertyName, *Target.ContainerType->GetName());
+            return nullptr;
+        }
+        LeafAddr = LeafProp->ContainerPtrToValuePtr<void>(Target.ContainerAddress);
+    }
+
+    return GetValueAtAddress(LeafProp, LeafAddr, OutErrorMessage);
 }

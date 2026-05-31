@@ -75,6 +75,13 @@ public:
         UObject* OwningObject      = nullptr;
         FString  LeafPropertyName;
         FString  OuterPropertyName;
+
+        // v0.7.10 — when the path ends in an array index (e.g. "OverrideMaterials.0"),
+        // the leaf isn't a named UPROPERTY on a container; it's an element address
+        // inside a TArray. The walker fills these and SetPropertyAtTarget honors
+        // them in preference to the name-based lookup.
+        FProperty* LeafPropertyOverride = nullptr;
+        void*      LeafAddressOverride  = nullptr;
     };
 
     /**
@@ -99,4 +106,18 @@ public:
     static bool SetPropertyAtTarget(const FPropertyTarget& Target,
                                     const TSharedPtr<FJsonValue>& Value,
                                     FString& OutErrorMessage);
+
+    /**
+     * v0.7.10 — read counterpart to SetPropertyAtTarget. Resolves the leaf
+     * via the same FPropertyTarget shape (honoring array-index leaf overrides),
+     * serializes the FProperty value to a JSON node matching the type:
+     *   - Bool / Int / Float / Double / Byte → number
+     *   - Str / Name / Enum                  → string
+     *   - Struct (Vector, Rotator, LinearColor, Color, Vector4) → [..] array
+     *   - Object reference                   → object path string ("" if null)
+     *   - Array                              → {kind: "Array", length: N, inner: "..."}
+     * Returns nullptr + error message on unsupported / unreadable types.
+     */
+    static TSharedPtr<FJsonValue> GetPropertyAtTarget(const FPropertyTarget& Target,
+                                                      FString& OutErrorMessage);
 };

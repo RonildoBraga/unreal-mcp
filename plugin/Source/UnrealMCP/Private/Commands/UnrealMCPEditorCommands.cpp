@@ -18,6 +18,11 @@
 #include "Engine/SpotLight.h"
 #include "Camera/CameraActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Containers/Ticker.h"
 #include "EditorSubsystem.h"
 #include "Subsystems/EditorActorSubsystem.h"
 #include "Subsystems/UnrealEditorSubsystem.h"
@@ -59,6 +64,10 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandleSetStaticMeshActorMesh(Params);
     }
+    else if (CommandType == TEXT("set_static_mesh_material"))
+    {
+        return HandleSetStaticMeshMaterial(Params);
+    }
     else if (CommandType == TEXT("delete_actor"))
     {
         return HandleDeleteActor(Params);
@@ -70,6 +79,10 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     else if (CommandType == TEXT("get_actor_properties"))
     {
         return HandleGetActorProperties(Params);
+    }
+    else if (CommandType == TEXT("get_actor_property"))
+    {
+        return HandleGetActorProperty(Params);
     }
     else if (CommandType == TEXT("set_actor_property"))
     {
@@ -126,6 +139,35 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     else if (CommandType == TEXT("get_async_compile_status"))
     {
         return HandleGetAsyncCompileStatus(Params);
+    }
+    // v0.7.11 — PIE control
+    else if (CommandType == TEXT("start_pie"))
+    {
+        return HandleStartPIE(Params);
+    }
+    else if (CommandType == TEXT("stop_pie"))
+    {
+        return HandleStopPIE(Params);
+    }
+    else if (CommandType == TEXT("is_pie_active"))
+    {
+        return HandleIsPIEActive(Params);
+    }
+    else if (CommandType == TEXT("pie_get_player"))
+    {
+        return HandlePIEGetPlayer(Params);
+    }
+    else if (CommandType == TEXT("pie_set_player"))
+    {
+        return HandlePIESetPlayer(Params);
+    }
+    else if (CommandType == TEXT("pie_apply_movement"))
+    {
+        return HandlePIEApplyMovement(Params);
+    }
+    else if (CommandType == TEXT("pie_screenshot"))
+    {
+        return HandlePIEScreenshot(Params);
     }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
@@ -234,30 +276,45 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActor(const TShared
     FActorSpawnParameters SpawnParams;
     SpawnParams.Name = *ActorName;
 
-    if (ActorType == TEXT("StaticMeshActor"))
+    // v0.7.10 — generic UClass lookup so spawn_actor accepts ANY AActor subclass.
+    // Accepts three input shapes:
+    //   (a) full path:  "/Script/Engine.SkyAtmosphere"        — used as-is
+    //   (b) bare name:  "SkyAtmosphere"                       — tries "/Script/Engine.<name>",
+    //                                                          then "/Script/UnrealEd.<name>"
+    //   (c) bare name not in Engine/UnrealEd                  — wildcard package search via
+    //                                                          UClass::TryFindTypeSlow (rare)
+    // Replaces the v0.7.0 hardcoded if/else over 5 known types — Phase 7.2 needed
+    // SkyAtmosphere and ExponentialHeightFog, neither of which was in the list.
+    UClass* ActorClass = nullptr;
+    if (ActorType.Contains(TEXT(".")))
     {
-        NewActor = World->SpawnActor<AStaticMeshActor>(AStaticMeshActor::StaticClass(), Location, Rotation, SpawnParams);
-    }
-    else if (ActorType == TEXT("PointLight"))
-    {
-        NewActor = World->SpawnActor<APointLight>(APointLight::StaticClass(), Location, Rotation, SpawnParams);
-    }
-    else if (ActorType == TEXT("SpotLight"))
-    {
-        NewActor = World->SpawnActor<ASpotLight>(ASpotLight::StaticClass(), Location, Rotation, SpawnParams);
-    }
-    else if (ActorType == TEXT("DirectionalLight"))
-    {
-        NewActor = World->SpawnActor<ADirectionalLight>(ADirectionalLight::StaticClass(), Location, Rotation, SpawnParams);
-    }
-    else if (ActorType == TEXT("CameraActor"))
-    {
-        NewActor = World->SpawnActor<ACameraActor>(ACameraActor::StaticClass(), Location, Rotation, SpawnParams);
+        ActorClass = LoadObject<UClass>(nullptr, *ActorType);
     }
     else
     {
-        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown actor type: %s"), *ActorType));
+        static const TCHAR* CandidateModules[] = { TEXT("Engine"), TEXT("UnrealEd") };
+        for (const TCHAR* Module : CandidateModules)
+        {
+            const FString FullPath = FString::Printf(TEXT("/Script/%s.%s"), Module, *ActorType);
+            ActorClass = LoadObject<UClass>(nullptr, *FullPath);
+            if (ActorClass)
+            {
+                break;
+            }
+        }
+        if (!ActorClass)
+        {
+            ActorClass = UClass::TryFindTypeSlow<UClass>(ActorType);
+        }
     }
+
+    if (!ActorClass || !ActorClass->IsChildOf(AActor::StaticClass()))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Unknown actor type: %s (not a resolvable AActor subclass)"), *ActorType));
+    }
+
+    NewActor = World->SpawnActor<AActor>(ActorClass, Location, Rotation, SpawnParams);
 
     if (NewActor)
     {
@@ -415,6 +472,87 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshActorMesh(c
     return FUnrealMCPCommonUtils::ActorToJsonObject(SMA, true);
 }
 
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshMaterial(const TSharedPtr<FJsonObject>& Params)
+{
+    // v0.7.10 — material-slot write convenience. Equivalent to dotted-path
+    // "StaticMeshComponent.OverrideMaterials.<slot>" with v0.7.10's FArrayProperty
+    // walker, but this tool is the ergonomic path when all you want is "fix the
+    // broken-parent magenta on slot 0". Calls UStaticMeshComponent::SetMaterial
+    // which handles MarkRenderStateDirty internally.
+    FString ActorName, MaterialPath;
+    int32   Slot = 0;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+    if (!Params->TryGetStringField(TEXT("material_path"), MaterialPath) || MaterialPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'material_path' parameter"));
+    }
+    Params->TryGetNumberField(TEXT("slot"), Slot);  // optional, defaults 0
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world loaded"));
+    }
+
+    AActor* TargetActor = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* Actor : AllActors)
+    {
+        if (Actor && Actor->GetName() == ActorName)
+        {
+            TargetActor = Actor;
+            break;
+        }
+    }
+    if (!TargetActor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    AStaticMeshActor* SMA = Cast<AStaticMeshActor>(TargetActor);
+    if (!SMA)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor '%s' is not a StaticMeshActor"), *ActorName));
+    }
+
+    UStaticMeshComponent* MeshComp = SMA->GetStaticMeshComponent();
+    if (!MeshComp)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("StaticMeshActor has no StaticMeshComponent"));
+    }
+
+    UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *MaterialPath);
+    if (!Material)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Material not found at path: %s"), *MaterialPath));
+    }
+
+    const int32 NumSlots = MeshComp->GetNumMaterials();
+    if (Slot < 0 || Slot >= NumSlots)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Slot %d out of range (mesh has %d material slot(s))"),
+                Slot, NumSlots));
+    }
+
+    MeshComp->SetMaterial(Slot, Material);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("actor"), ActorName);
+    Result->SetNumberField(TEXT("slot"), Slot);
+    Result->SetStringField(TEXT("material_path"), MaterialPath);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
 TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActor(const TSharedPtr<FJsonObject>& Params)
 {
     FString ActorName;
@@ -526,6 +664,67 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperties(const
 
     // Always return detailed properties for this command
     return FUnrealMCPCommonUtils::ActorToJsonObject(TargetActor, true);
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    // v0.7.10 — read counterpart to set_actor_property. Same dotted-path
+    // resolution (FObjectProperty hops, FStructProperty hops, FArrayProperty
+    // hops with numeric index), but returns the leaf value instead of writing.
+    // Useful for inspecting mesh refs, material slot assignments, light
+    // intensities, etc. without restarting the editor.
+    FString ActorName, PropertyPath;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+    if (!Params->TryGetStringField(TEXT("property_name"), PropertyPath) || PropertyPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world loaded"));
+    }
+
+    AActor* TargetActor = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* Actor : AllActors)
+    {
+        if (Actor && Actor->GetName() == ActorName)
+        {
+            TargetActor = Actor;
+            break;
+        }
+    }
+    if (!TargetActor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    FUnrealMCPCommonUtils::FPropertyTarget Target;
+    FString ErrorMessage;
+    if (!FUnrealMCPCommonUtils::WalkPropertyPath(TargetActor, PropertyPath, Target, ErrorMessage))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(ErrorMessage);
+    }
+
+    TSharedPtr<FJsonValue> Value = FUnrealMCPCommonUtils::GetPropertyAtTarget(Target, ErrorMessage);
+    if (!Value.IsValid())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(ErrorMessage);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("actor"), ActorName);
+    Result->SetStringField(TEXT("property"), PropertyPath);
+    Result->SetField(TEXT("value"), Value);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }
 
 TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetActorProperty(const TSharedPtr<FJsonObject>& Params)
@@ -1221,4 +1420,282 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetAsyncCompileStatus(co
 
     Result->SetBoolField(TEXT("is_idle"), ShaderJobs == 0 && AssetCompiles == 0);
     return Result;
-} 
+}
+
+
+// ─── v0.7.11 — PIE control + player state for self-verification ───────────────
+
+namespace
+{
+    /** Resolve the active PIE world if a session is in progress, else nullptr. */
+    UWorld* GetPlayWorld()
+    {
+        if (!GEditor) return nullptr;
+        return GEditor->PlayWorld;
+    }
+
+    /** Resolve the player pawn at index 0 from the active PIE world, else nullptr. */
+    APawn* GetPIEPawn()
+    {
+        UWorld* PlayWorld = GetPlayWorld();
+        if (!PlayWorld) return nullptr;
+        return UGameplayStatics::GetPlayerPawn(PlayWorld, 0);
+    }
+
+    /** Pack (X, Y, Z) into a JSON [..] array. */
+    TSharedPtr<FJsonValue> PackVec3(const FVector& V)
+    {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(V.X));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Y));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Z));
+        return MakeShared<FJsonValueArray>(Arr);
+    }
+
+    /** Pack rotator (P, Y, R) into a JSON [..] array. */
+    TSharedPtr<FJsonValue> PackRot(const FRotator& R)
+    {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Pitch));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Yaw));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Roll));
+        return MakeShared<FJsonValueArray>(Arr);
+    }
+
+    /** Human-readable label for EMovementMode — useful for "is the character on the floor?" */
+    FString MovementModeToString(EMovementMode Mode)
+    {
+        switch (Mode)
+        {
+            case MOVE_None:       return TEXT("None");
+            case MOVE_Walking:    return TEXT("Walking");
+            case MOVE_NavWalking: return TEXT("NavWalking");
+            case MOVE_Falling:    return TEXT("Falling");
+            case MOVE_Swimming:   return TEXT("Swimming");
+            case MOVE_Flying:     return TEXT("Flying");
+            case MOVE_Custom:     return TEXT("Custom");
+            default:              return FString::Printf(TEXT("Unknown(%d)"), static_cast<int32>(Mode));
+        }
+    }
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStartPIE(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+    if (GEditor->PlayWorld)
+    {
+        // Already in PIE — treat as success but flag it.
+        TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+        R->SetBoolField(TEXT("success"), true);
+        R->SetBoolField(TEXT("already_active"), true);
+        return R;
+    }
+
+    // Queue a play-session request using the project's last-used PIE settings.
+    // No FRequestPlaySessionParams customization — sticks with the user's
+    // configured play mode, viewport, and settings from Editor Preferences.
+    FRequestPlaySessionParams PlayParams;
+    GEditor->RequestPlaySession(PlayParams);
+    GEditor->StartQueuedPlaySessionRequest();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("already_active"), false);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStopPIE(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+    const bool bWasActive = GEditor->PlayWorld != nullptr;
+    GEditor->RequestEndPlayMap();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("was_active"), bWasActive);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleIsPIEActive(const TSharedPtr<FJsonObject>& Params)
+{
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("active"), GEditor && GEditor->PlayWorld != nullptr);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEGetPlayer(const TSharedPtr<FJsonObject>& Params)
+{
+    APawn* Pawn = GetPIEPawn();
+    if (!Pawn)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PIE pawn — is PIE active?"));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetField(TEXT("location"), PackVec3(Pawn->GetActorLocation()));
+    Result->SetField(TEXT("rotation"), PackRot(Pawn->GetActorRotation()));
+    Result->SetField(TEXT("velocity"), PackVec3(Pawn->GetVelocity()));
+    Result->SetStringField(TEXT("pawn_class"), Pawn->GetClass()->GetName());
+
+    // Useful walkability signals — is the character on the ground?
+    if (UCharacterMovementComponent* Move = Pawn->FindComponentByClass<UCharacterMovementComponent>())
+    {
+        Result->SetStringField(TEXT("movement_mode"), MovementModeToString(Move->MovementMode));
+        Result->SetBoolField(TEXT("is_falling"), Move->IsFalling());
+        Result->SetBoolField(TEXT("is_movement_in_progress"), Move->Velocity.SizeSquared() > 0.01f);
+    }
+
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params)
+{
+    APawn* Pawn = GetPIEPawn();
+    if (!Pawn)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PIE pawn — is PIE active?"));
+    }
+
+    FVector  Location = Pawn->GetActorLocation();
+    FRotator Rotation = Pawn->GetActorRotation();
+    if (Params->HasField(TEXT("location")))
+    {
+        Location = FUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("location"));
+    }
+    if (Params->HasField(TEXT("rotation")))
+    {
+        Rotation = FUnrealMCPCommonUtils::GetRotatorFromJson(Params, TEXT("rotation"));
+    }
+
+    // SweepTest = false means we teleport regardless of collision; the
+    // intent here is "put the player at exactly this location for testing",
+    // not "simulate physically arriving here".
+    Pawn->SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetField(TEXT("location"), PackVec3(Pawn->GetActorLocation()));
+    Result->SetField(TEXT("rotation"), PackRot(Pawn->GetActorRotation()));
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params)
+{
+    APawn* Pawn = GetPIEPawn();
+    if (!Pawn)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PIE pawn — is PIE active?"));
+    }
+
+    FVector Direction(1.0f, 0.0f, 0.0f);
+    if (Params->HasField(TEXT("direction")))
+    {
+        Direction = FUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("direction"));
+    }
+    Direction.Normalize();
+
+    double Duration = 1.0;
+    Params->TryGetNumberField(TEXT("duration"), Duration);
+    Duration = FMath::Clamp(Duration, 0.05, 30.0);
+
+    double Scale = 1.0;
+    Params->TryGetNumberField(TEXT("scale"), Scale);
+
+    // Fire-and-forget movement — register a ticker that calls
+    // AddMovementInput each frame for the requested duration, then
+    // unregisters itself. Caller waits client-side, then queries
+    // pie_get_player to read the result.
+    TWeakObjectPtr<APawn> WeakPawn(Pawn);
+    const double EndTime = FPlatformTime::Seconds() + Duration;
+    const FVector Dir = Direction;
+    const float ScaleVal = static_cast<float>(Scale);
+
+    FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateLambda([WeakPawn, Dir, ScaleVal, EndTime](float /*DeltaSeconds*/) -> bool
+        {
+            APawn* P = WeakPawn.Get();
+            if (!P) return false;                          // pawn died → stop
+            if (FPlatformTime::Seconds() >= EndTime) return false; // time's up → stop
+            P->AddMovementInput(Dir, ScaleVal);
+            return true;                                   // keep ticking
+        }),
+        0.0f);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetField(TEXT("direction"), PackVec3(Direction));
+    Result->SetNumberField(TEXT("duration"), Duration);
+    Result->SetNumberField(TEXT("scale"), Scale);
+    Result->SetStringField(TEXT("note"),
+        TEXT("Movement queued asynchronously. Sleep at least 'duration' seconds before reading pie_get_player to see the final state."));
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params)
+{
+    UWorld* PlayWorld = GetPlayWorld();
+    if (!PlayWorld)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("PIE not active"));
+    }
+    UGameViewportClient* GameViewport = PlayWorld->GetGameViewport();
+    if (!GameViewport || !GameViewport->Viewport)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PIE game viewport"));
+    }
+
+    // Resolve output path (same convention as HandleTakeScreenshot).
+    FString Filename = TEXT("pie_screenshot.png");
+    Params->TryGetStringField(TEXT("filename"), Filename);
+    if (!Filename.EndsWith(TEXT(".png")))
+    {
+        Filename += TEXT(".png");
+    }
+    FString OutputPath;
+    if (FPaths::IsRelative(Filename))
+    {
+        OutputPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots"), Filename);
+    }
+    else
+    {
+        OutputPath = Filename;
+    }
+
+    // Force a fresh redraw before capture (v0.7.7-style stale-buffer guard).
+    FViewport* Viewport = GameViewport->Viewport;
+    Viewport->Invalidate();
+    Viewport->Draw();
+    FlushRenderingCommands();
+
+    // Capture pixel array → PNG (FImageUtils legacy API; deprecated warning
+    // tracked separately).
+    TArray<FColor> Bitmap;
+    if (!Viewport->ReadPixels(Bitmap))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("ReadPixels failed on PIE viewport"));
+    }
+    for (FColor& Px : Bitmap) { Px.A = 255; }
+
+    TArray64<uint8> CompressedBitmap;
+    FImageUtils::PNGCompressImageArray(Viewport->GetSizeXY().X, Viewport->GetSizeXY().Y, Bitmap, CompressedBitmap);
+
+    if (!FFileHelper::SaveArrayToFile(CompressedBitmap, *OutputPath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to write screenshot: %s"), *OutputPath));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("path"), OutputPath);
+    Result->SetNumberField(TEXT("width"), Viewport->GetSizeXY().X);
+    Result->SetNumberField(TEXT("height"), Viewport->GetSizeXY().Y);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}

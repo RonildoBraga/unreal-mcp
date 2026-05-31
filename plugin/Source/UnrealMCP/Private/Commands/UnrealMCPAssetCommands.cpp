@@ -1,4 +1,4 @@
-#include "Commands/UnrealMCPAssetCommands.h"
+#include "MCPRegistry.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -19,6 +19,10 @@
 #include "Editor.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
+
+namespace
+{
+
 
 namespace
 {
@@ -69,36 +73,10 @@ namespace
 }
 
 
-FUnrealMCPAssetCommands::FUnrealMCPAssetCommands()
-{
-}
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    if (CommandType == TEXT("list_assets"))            return HandleListAssets(Params);
-    if (CommandType == TEXT("get_asset_info"))         return HandleGetAssetInfo(Params);
-    if (CommandType == TEXT("find_assets_by_class"))   return HandleFindAssetsByClass(Params);
-    if (CommandType == TEXT("get_asset_dependencies")) return HandleGetAssetDependencies(Params);
-    if (CommandType == TEXT("get_asset_references"))   return HandleGetAssetReferences(Params);
-    if (CommandType == TEXT("move_asset"))             return HandleMoveAsset(Params);
-    if (CommandType == TEXT("delete_asset"))           return HandleDeleteAsset(Params);
-    if (CommandType == TEXT("rename_asset"))           return HandleRenameAsset(Params);
-    if (CommandType == TEXT("duplicate_asset"))        return HandleDuplicateAsset(Params);
-    if (CommandType == TEXT("migrate_assets"))         return HandleMigrateAssets(Params);
-    if (CommandType == TEXT("import_asset"))           return HandleImportAsset(Params);
-    if (CommandType == TEXT("finalize_migration"))     return HandleFinalizeMigration(Params);
-    if (CommandType == TEXT("focus_in_browser"))       return HandleFocusInBrowser(Params);
-    if (CommandType == TEXT("navigate_to_folder"))     return HandleNavigateToFolder(Params);
-    if (CommandType == TEXT("open_in_editor"))         return HandleOpenInEditor(Params);
-    if (CommandType == TEXT("static_mesh_get_info"))   return HandleStaticMeshGetInfo(Params);
 
-    return FUnrealMCPCommonUtils::CreateErrorResponse(
-        FString::Printf(TEXT("Unknown asset command: %s"), *CommandType));
-}
-
-
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleListAssets(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleListAssets(const TSharedPtr<FJsonObject>& Params)
 {
     FString Path;
     if (!Params->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
@@ -152,7 +130,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleListAssets(const TSharedP
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetInfo(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetAssetInfo(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -201,7 +179,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetInfo(const TShare
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFindAssetsByClass(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFindAssetsByClass(const TSharedPtr<FJsonObject>& Params)
 {
     FString ClassName;
     if (!Params->TryGetStringField(TEXT("class_name"), ClassName) || ClassName.IsEmpty())
@@ -254,7 +232,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFindAssetsByClass(const T
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetDependencies(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetAssetDependencies(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -324,7 +302,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetDependencies(cons
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetReferences(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetAssetReferences(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -357,7 +335,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleGetAssetReferences(const 
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMoveAsset(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleMoveAsset(const TSharedPtr<FJsonObject>& Params)
 {
     FString FromPath, ToPath;
     if (!Params->TryGetStringField(TEXT("from_path"), FromPath) || FromPath.IsEmpty() ||
@@ -384,7 +362,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMoveAsset(const TSharedPt
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleDeleteAsset(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleDeleteAsset(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -401,7 +379,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleDeleteAsset(const TShared
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleRenameAsset(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleRenameAsset(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath, NewName;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty() ||
@@ -427,7 +405,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleRenameAsset(const TShared
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath, TargetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"),  AssetPath)  || AssetPath.IsEmpty() ||
@@ -464,7 +442,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleDuplicateAsset(const TSha
 // preserving the /Game/-relative directory layout. This is exactly what
 // UE Migrate does under the hood for the actual file-copy step.
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleMigrateAssets(const TSharedPtr<FJsonObject>& Params)
 {
     // 1. Parse params
     const TArray<TSharedPtr<FJsonValue>>* AssetPathsJson = nullptr;
@@ -634,7 +612,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleMigrateAssets(const TShar
 // like LOD / material import behavior become needed, add an optional
 // `import_options` JSON struct rather than splitting the tool.
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleImportAsset(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleImportAsset(const TSharedPtr<FJsonObject>& Params)
 {
     FString FilePath;
     if (!Params->TryGetStringField(TEXT("file_path"), FilePath) || FilePath.IsEmpty())
@@ -727,7 +705,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleImportAsset(const TShared
 // One call, all paths fixed. Idempotent (re-running on already-renamed
 // content is a no-op).
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFinalizeMigration(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFinalizeMigration(const TSharedPtr<FJsonObject>& Params)
 {
     FString MigratedRoot;
     if (!Params->TryGetStringField(TEXT("migrated_root"), MigratedRoot) || MigratedRoot.IsEmpty())
@@ -900,7 +878,7 @@ namespace
     }
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFocusInBrowser(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFocusInBrowser(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -926,7 +904,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFocusInBrowser(const TSha
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleNavigateToFolder(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleNavigateToFolder(const TSharedPtr<FJsonObject>& Params)
 {
     FString FolderPath;
     if (!Params->TryGetStringField(TEXT("folder_path"), FolderPath) || FolderPath.IsEmpty())
@@ -952,7 +930,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleNavigateToFolder(const TS
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleOpenInEditor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleOpenInEditor(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -997,7 +975,7 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleOpenInEditor(const TShare
 // caller-supplied scale, and the material slot list with current default
 // assignments.
 
-TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleStaticMeshGetInfo(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleStaticMeshGetInfo(const TSharedPtr<FJsonObject>& Params)
 {
     FString AssetPath;
     if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
@@ -1059,3 +1037,23 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleStaticMeshGetInfo(const T
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }
+
+}  // anonymous namespace
+
+
+REGISTER_MCP_COMMAND("list_assets", &HandleListAssets);
+REGISTER_MCP_COMMAND("get_asset_info", &HandleGetAssetInfo);
+REGISTER_MCP_COMMAND("find_assets_by_class", &HandleFindAssetsByClass);
+REGISTER_MCP_COMMAND("get_asset_dependencies", &HandleGetAssetDependencies);
+REGISTER_MCP_COMMAND("get_asset_references", &HandleGetAssetReferences);
+REGISTER_MCP_COMMAND("move_asset", &HandleMoveAsset);
+REGISTER_MCP_COMMAND("delete_asset", &HandleDeleteAsset);
+REGISTER_MCP_COMMAND("rename_asset", &HandleRenameAsset);
+REGISTER_MCP_COMMAND("duplicate_asset", &HandleDuplicateAsset);
+REGISTER_MCP_COMMAND("migrate_assets", &HandleMigrateAssets);
+REGISTER_MCP_COMMAND("import_asset", &HandleImportAsset);
+REGISTER_MCP_COMMAND("finalize_migration", &HandleFinalizeMigration);
+REGISTER_MCP_COMMAND("focus_in_browser", &HandleFocusInBrowser);
+REGISTER_MCP_COMMAND("navigate_to_folder", &HandleNavigateToFolder);
+REGISTER_MCP_COMMAND("open_in_editor", &HandleOpenInEditor);
+REGISTER_MCP_COMMAND("static_mesh_get_info", &HandleStaticMeshGetInfo);

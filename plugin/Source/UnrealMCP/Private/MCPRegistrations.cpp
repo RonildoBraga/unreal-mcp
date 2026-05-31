@@ -28,10 +28,8 @@
 #include "Dom/JsonObject.h"
 
 #include "MCPRegistry.h"
-#include "Commands/UnrealMCPEditorCommands.h"
 #include "Commands/UnrealMCPBlueprintCommands.h"
 #include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPAssetCommands.h"
 
 #include <initializer_list>
 
@@ -91,55 +89,7 @@ namespace
 					return Out;
 				});
 
-			// ─── Editor: actors, viewport, screenshots, console, PIE, selection ────
-			RegBatch<FUnrealMCPEditorCommands>({
-				TEXT("get_actors_in_level"),
-				TEXT("find_actors_by_name"),
-				TEXT("spawn_actor"),
-				TEXT("create_actor"),
-				TEXT("spawn_static_mesh_actor"),
-				TEXT("set_static_mesh_actor_mesh"),
-				TEXT("set_static_mesh_material"),
-				TEXT("delete_actor"),
-				TEXT("set_actor_transform"),
-				TEXT("get_actor_properties"),
-				TEXT("get_actor_property"),
-				TEXT("set_actor_property"),
-				TEXT("spawn_blueprint_actor"),
-				TEXT("focus_viewport"),
-				TEXT("take_screenshot"),
-				TEXT("get_viewport_camera"),
-				TEXT("set_viewport_camera"),
-				TEXT("execute_console_command"),
-				TEXT("set_cvar"),
-				TEXT("get_cvar"),
-				TEXT("get_viewport_mode"),
-				TEXT("set_viewport_mode"),
-				TEXT("read_output_log"),
-				TEXT("get_async_compile_status"),
-				TEXT("start_pie"),
-				TEXT("stop_pie"),
-				TEXT("is_pie_active"),
-				TEXT("pie_get_player"),
-				TEXT("pie_set_player"),
-				TEXT("pie_apply_movement"),
-				TEXT("pie_screenshot"),
-				TEXT("get_selected_actors"),
-				TEXT("set_selected_actors"),
-				TEXT("clear_selection"),
-				TEXT("focus_selected_actors"),
-				TEXT("find_actors"),
-				TEXT("spawn_actor_batch"),
-				TEXT("delete_actor_batch"),
-				TEXT("get_object_property"),
-				TEXT("set_object_property"),
-				TEXT("frame_actor"),
-				TEXT("set_show_flag"),
-				TEXT("wait_for_async_compile"),
-				TEXT("dismiss_modal_dialog"),
-				TEXT("get_actor_transform"),
-				TEXT("recompile_live"),
-			});
+			// editor.* self-registers in Commands/UnrealMCPEditorCommands.cpp.
 
 			RegBatch<FUnrealMCPBlueprintCommands>({
 				TEXT("create_blueprint"),
@@ -168,24 +118,7 @@ namespace
 			// sites in Commands/UnrealMCPProjectCommands.cpp (v0.8.x §6.2
 			// completion). FUnrealMCPProjectCommands class deleted.
 
-			RegBatch<FUnrealMCPAssetCommands>({
-				TEXT("list_assets"),
-				TEXT("get_asset_info"),
-				TEXT("find_assets_by_class"),
-				TEXT("get_asset_dependencies"),
-				TEXT("get_asset_references"),
-				TEXT("move_asset"),
-				TEXT("delete_asset"),
-				TEXT("rename_asset"),
-				TEXT("duplicate_asset"),
-				TEXT("migrate_assets"),
-				TEXT("import_asset"),
-				TEXT("finalize_migration"),
-				TEXT("focus_in_browser"),
-				TEXT("navigate_to_folder"),
-				TEXT("open_in_editor"),
-				TEXT("static_mesh_get_info"),
-			});
+			// assets.* self-registers in Commands/UnrealMCPAssetCommands.cpp.
 
 			// level.* now self-registers in Commands/UnrealMCPLevelCommands.cpp
 			// (v0.8.x §6.2 completion). FUnrealMCPLevelCommands class deleted.

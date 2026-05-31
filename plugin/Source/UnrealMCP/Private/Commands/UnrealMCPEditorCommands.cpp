@@ -1,4 +1,4 @@
-#include "Commands/UnrealMCPEditorCommands.h"
+#include "MCPRegistry.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Reflection/ClassLookup.h"
 #include "Reflection/ObjectLookup.h"
@@ -39,210 +39,13 @@
 #include "ShaderCompiler.h"
 #include "Misc/App.h"
 
-FUnrealMCPEditorCommands::FUnrealMCPEditorCommands()
+namespace
 {
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    // Actor manipulation commands
-    if (CommandType == TEXT("get_actors_in_level"))
-    {
-        return HandleGetActorsInLevel(Params);
-    }
-    else if (CommandType == TEXT("find_actors_by_name"))
-    {
-        return HandleFindActorsByName(Params);
-    }
-    else if (CommandType == TEXT("spawn_actor") || CommandType == TEXT("create_actor"))
-    {
-        if (CommandType == TEXT("create_actor"))
-        {
-            UE_LOG(LogTemp, Warning, TEXT("'create_actor' command is deprecated and will be removed in a future version. Please use 'spawn_actor' instead."));
-        }
-        return HandleSpawnActor(Params);
-    }
-    else if (CommandType == TEXT("spawn_static_mesh_actor"))
-    {
-        return HandleSpawnStaticMeshActor(Params);
-    }
-    else if (CommandType == TEXT("set_static_mesh_actor_mesh"))
-    {
-        return HandleSetStaticMeshActorMesh(Params);
-    }
-    else if (CommandType == TEXT("set_static_mesh_material"))
-    {
-        return HandleSetStaticMeshMaterial(Params);
-    }
-    else if (CommandType == TEXT("delete_actor"))
-    {
-        return HandleDeleteActor(Params);
-    }
-    else if (CommandType == TEXT("set_actor_transform"))
-    {
-        return HandleSetActorTransform(Params);
-    }
-    else if (CommandType == TEXT("get_actor_properties"))
-    {
-        return HandleGetActorProperties(Params);
-    }
-    else if (CommandType == TEXT("get_actor_property"))
-    {
-        return HandleGetActorProperty(Params);
-    }
-    else if (CommandType == TEXT("set_actor_property"))
-    {
-        return HandleSetActorProperty(Params);
-    }
-    // Blueprint actor spawning
-    else if (CommandType == TEXT("spawn_blueprint_actor"))
-    {
-        return HandleSpawnBlueprintActor(Params);
-    }
-    // Editor viewport commands
-    else if (CommandType == TEXT("focus_viewport"))
-    {
-        return HandleFocusViewport(Params);
-    }
-    else if (CommandType == TEXT("take_screenshot"))
-    {
-        return HandleTakeScreenshot(Params);
-    }
-    // Editor state extensions (Sprint 1)
-    else if (CommandType == TEXT("get_viewport_camera"))
-    {
-        return HandleGetViewportCamera(Params);
-    }
-    else if (CommandType == TEXT("set_viewport_camera"))
-    {
-        return HandleSetViewportCamera(Params);
-    }
-    else if (CommandType == TEXT("execute_console_command"))
-    {
-        return HandleExecuteConsoleCommand(Params);
-    }
-    else if (CommandType == TEXT("set_cvar"))
-    {
-        return HandleSetCVar(Params);
-    }
-    else if (CommandType == TEXT("get_cvar"))
-    {
-        return HandleGetCVar(Params);
-    }
-    // v0.7.6 — viewport mode + introspection
-    else if (CommandType == TEXT("get_viewport_mode"))
-    {
-        return HandleGetViewportMode(Params);
-    }
-    else if (CommandType == TEXT("set_viewport_mode"))
-    {
-        return HandleSetViewportMode(Params);
-    }
-    else if (CommandType == TEXT("read_output_log"))
-    {
-        return HandleReadOutputLog(Params);
-    }
-    else if (CommandType == TEXT("get_async_compile_status"))
-    {
-        return HandleGetAsyncCompileStatus(Params);
-    }
-    // v0.7.11 — PIE control
-    else if (CommandType == TEXT("start_pie"))
-    {
-        return HandleStartPIE(Params);
-    }
-    else if (CommandType == TEXT("stop_pie"))
-    {
-        return HandleStopPIE(Params);
-    }
-    else if (CommandType == TEXT("is_pie_active"))
-    {
-        return HandleIsPIEActive(Params);
-    }
-    else if (CommandType == TEXT("pie_get_player"))
-    {
-        return HandlePIEGetPlayer(Params);
-    }
-    else if (CommandType == TEXT("pie_set_player"))
-    {
-        return HandlePIESetPlayer(Params);
-    }
-    else if (CommandType == TEXT("pie_apply_movement"))
-    {
-        return HandlePIEApplyMovement(Params);
-    }
-    else if (CommandType == TEXT("pie_screenshot"))
-    {
-        return HandlePIEScreenshot(Params);
-    }
-    // v0.7.12 — selection introspection
-    else if (CommandType == TEXT("get_selected_actors"))
-    {
-        return HandleGetSelectedActors(Params);
-    }
-    // v0.8.0 Day 2c-i+ — programmatic Live Coding rebuild
-    else if (CommandType == TEXT("recompile_live"))
-    {
-        return HandleRecompileLive(Params);
-    }
-    // v0.8.0 Day 3-4 — selection mutation + framing
-    else if (CommandType == TEXT("set_selected_actors"))
-    {
-        return HandleSetSelectedActors(Params);
-    }
-    else if (CommandType == TEXT("clear_selection"))
-    {
-        return HandleClearSelection(Params);
-    }
-    else if (CommandType == TEXT("focus_selected_actors"))
-    {
-        return HandleFocusSelectedActors(Params);
-    }
-    else if (CommandType == TEXT("find_actors"))
-    {
-        return HandleFindActors(Params);
-    }
-    else if (CommandType == TEXT("spawn_actor_batch"))
-    {
-        return HandleSpawnActorBatch(Params);
-    }
-    else if (CommandType == TEXT("delete_actor_batch"))
-    {
-        return HandleDeleteActorBatch(Params);
-    }
-    else if (CommandType == TEXT("get_object_property"))
-    {
-        return HandleGetObjectProperty(Params);
-    }
-    else if (CommandType == TEXT("set_object_property"))
-    {
-        return HandleSetObjectProperty(Params);
-    }
-    else if (CommandType == TEXT("frame_actor"))
-    {
-        return HandleFrameActor(Params);
-    }
-    else if (CommandType == TEXT("set_show_flag"))
-    {
-        return HandleSetShowFlag(Params);
-    }
-    else if (CommandType == TEXT("wait_for_async_compile"))
-    {
-        return HandleWaitForAsyncCompile(Params);
-    }
-    else if (CommandType == TEXT("dismiss_modal_dialog"))
-    {
-        return HandleDismissModalDialog(Params);
-    }
-    else if (CommandType == TEXT("get_actor_transform"))
-    {
-        return HandleGetActorTransform(Params);
-    }
 
-    return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorsInLevel(const TSharedPtr<FJsonObject>& Params)
+
+TSharedPtr<FJsonObject> HandleGetActorsInLevel(const TSharedPtr<FJsonObject>& Params)
 {
     TArray<AActor*> AllActors;
     UGameplayStatics::GetAllActorsOfClass(GWorld, AActor::StaticClass(), AllActors);
@@ -262,7 +65,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorsInLevel(const T
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFindActorsByName(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFindActorsByName(const TSharedPtr<FJsonObject>& Params)
 {
     FString Pattern;
     if (!Params->TryGetStringField(TEXT("pattern"), Pattern))
@@ -288,7 +91,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFindActorsByName(const T
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSpawnActor(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString ActorType;
@@ -399,7 +202,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActor(const TShared
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create actor"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnStaticMeshActor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSpawnStaticMeshActor(const TSharedPtr<FJsonObject>& Params)
 {
     // spawn_static_mesh_actor combines spawn_actor + mesh assignment into one call.
     // This is the ergonomic path for placing Megascans / Quixel meshes from the
@@ -484,7 +287,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnStaticMeshActor(con
     return FUnrealMCPCommonUtils::ActorToJsonObject(NewActor, true);
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshActorMesh(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetStaticMeshActorMesh(const TSharedPtr<FJsonObject>& Params)
 {
     // Retroactive mesh swap on an already-spawned StaticMeshActor. Useful for
     // (a) replacing a placeholder mesh with the real Megascans one once it's
@@ -541,7 +344,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshActorMesh(c
     return FUnrealMCPCommonUtils::ActorToJsonObject(SMA, true);
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshMaterial(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetStaticMeshMaterial(const TSharedPtr<FJsonObject>& Params)
 {
     // v0.7.10 — material-slot write convenience. Equivalent to dotted-path
     // "StaticMeshComponent.OverrideMaterials.<slot>" with v0.7.10's FArrayProperty
@@ -622,7 +425,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetStaticMeshMaterial(co
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleDeleteActor(const TSharedPtr<FJsonObject>& Params)
 {
     FString ActorName;
     if (!Params->TryGetStringField(TEXT("name"), ActorName))
@@ -652,7 +455,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActor(const TShare
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor not found: %s"), *ActorName));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetActorTransform(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetActorTransform(const TSharedPtr<FJsonObject>& Params)
 {
     // Get actor name
     FString ActorName;
@@ -703,7 +506,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetActorTransform(const 
     return FUnrealMCPCommonUtils::ActorToJsonObject(TargetActor, true);
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperties(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetActorProperties(const TSharedPtr<FJsonObject>& Params)
 {
     // Get actor name
     FString ActorName;
@@ -735,7 +538,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperties(const
     return FUnrealMCPCommonUtils::ActorToJsonObject(TargetActor, true);
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetActorProperty(const TSharedPtr<FJsonObject>& Params)
 {
     // v0.7.10 — read counterpart to set_actor_property. Same dotted-path
     // resolution (FObjectProperty hops, FStructProperty hops, FArrayProperty
@@ -796,7 +599,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorProperty(const T
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetActorProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetActorProperty(const TSharedPtr<FJsonObject>& Params)
 {
     // Get actor name
     FString ActorName;
@@ -887,7 +690,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetActorProperty(const T
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnBlueprintActor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSpawnBlueprintActor(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -964,7 +767,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnBlueprintActor(cons
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to spawn blueprint actor"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusViewport(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFocusViewport(const TSharedPtr<FJsonObject>& Params)
 {
     // Get target actor name if provided
     FString TargetActorName;
@@ -1051,7 +854,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusViewport(const TSha
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleTakeScreenshot(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleTakeScreenshot(const TSharedPtr<FJsonObject>& Params)
 {
     // Accept "filepath" (the established name) or "filename" (a common alias
     // used by callers more familiar with file-system terms). One must be present.
@@ -1144,7 +947,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleTakeScreenshot(const TSh
 
 // ─── Editor state extensions (Sprint 1) ──────────────────────────────────────
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetViewportCamera(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetViewportCamera(const TSharedPtr<FJsonObject>& Params)
 {
     UUnrealEditorSubsystem* EditorSub = GEditor ? GEditor->GetEditorSubsystem<UUnrealEditorSubsystem>() : nullptr;
     if (!EditorSub)
@@ -1173,7 +976,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetViewportCamera(const 
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetViewportCamera(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetViewportCamera(const TSharedPtr<FJsonObject>& Params)
 {
     UUnrealEditorSubsystem* EditorSub = GEditor ? GEditor->GetEditorSubsystem<UUnrealEditorSubsystem>() : nullptr;
     if (!EditorSub)
@@ -1242,7 +1045,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetViewportCamera(const 
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleExecuteConsoleCommand(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleExecuteConsoleCommand(const TSharedPtr<FJsonObject>& Params)
 {
     FString Command;
     if (!Params->TryGetStringField(TEXT("command"), Command) || Command.IsEmpty())
@@ -1265,7 +1068,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleExecuteConsoleCommand(co
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetCVar(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetCVar(const TSharedPtr<FJsonObject>& Params)
 {
     FString Name, Value;
     if (!Params->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
@@ -1304,7 +1107,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetCVar(const TSharedPtr
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetCVar(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetCVar(const TSharedPtr<FJsonObject>& Params)
 {
     FString Name;
     if (!Params->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
@@ -1382,7 +1185,7 @@ namespace
     }
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetViewportMode(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetViewportMode(const TSharedPtr<FJsonObject>& Params)
 {
     FEditorViewportClient* Client = GetActiveEditorViewportClient();
     if (!Client)
@@ -1396,7 +1199,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetViewportMode(const TS
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetViewportMode(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetViewportMode(const TSharedPtr<FJsonObject>& Params)
 {
     FString Mode;
     if (!Params->TryGetStringField(TEXT("mode"), Mode) || Mode.IsEmpty())
@@ -1428,7 +1231,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetViewportMode(const TS
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleReadOutputLog(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleReadOutputLog(const TSharedPtr<FJsonObject>& Params)
 {
     // The editor's full log lives at <Project>/Saved/Logs/<ProjectName>.log. We
     // tail-read the last N lines via FFileHelper. Cheap and reliable.
@@ -1468,7 +1271,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleReadOutputLog(const TSha
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetAsyncCompileStatus(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetAsyncCompileStatus(const TSharedPtr<FJsonObject>& Params)
 {
     // Surfaces the editor's async compile queue counts so the caller (Claude /
     // any MCP client) can detect stalls like the v0.7.3 finalize_migration hang
@@ -1548,7 +1351,7 @@ namespace
     }
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStartPIE(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleStartPIE(const TSharedPtr<FJsonObject>& Params)
 {
     if (!GEditor)
     {
@@ -1576,7 +1379,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStartPIE(const TSharedPt
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStopPIE(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleStopPIE(const TSharedPtr<FJsonObject>& Params)
 {
     if (!GEditor)
     {
@@ -1591,14 +1394,14 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleStopPIE(const TSharedPtr
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleIsPIEActive(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleIsPIEActive(const TSharedPtr<FJsonObject>& Params)
 {
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("active"), GEditor && GEditor->PlayWorld != nullptr);
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEGetPlayer(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandlePIEGetPlayer(const TSharedPtr<FJsonObject>& Params)
 {
     APawn* Pawn = GetPIEPawn();
     if (!Pawn)
@@ -1624,7 +1427,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEGetPlayer(const TShar
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params)
 {
     APawn* Pawn = GetPIEPawn();
     if (!Pawn)
@@ -1655,7 +1458,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIESetPlayer(const TShar
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params)
 {
     APawn* Pawn = GetPIEPawn();
     if (!Pawn)
@@ -1707,7 +1510,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEApplyMovement(const T
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params)
 {
     UWorld* PlayWorld = GetPlayWorld();
     if (!PlayWorld)
@@ -1772,7 +1575,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEScreenshot(const TSha
 
 // ─── v0.7.12 — read the editor's current actor selection ─────────────────────
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params)
 {
     // Returns the current viewport / Outliner actor selection. Used to capture
     // a hand-curated subset of a scene (e.g. "the candle clusters + lanterns +
@@ -1843,7 +1646,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetSelectedActors(const 
 // "LogLiveCoding: Live coding failed" ~20-30 seconds later. Callers that
 // need to wait can tail the log via read_output_log (or sleep, which is
 // what most autonomous workflows will do).
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleRecompileLive(const TSharedPtr<FJsonObject>& /*Params*/)
+TSharedPtr<FJsonObject> HandleRecompileLive(const TSharedPtr<FJsonObject>& /*Params*/)
 {
     if (!GEditor)
     {
@@ -1889,7 +1692,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleRecompileLive(const TSha
 // internal name (GetName, returned as "internal_name"). This matches what a
 // caller does when they pass a list back round-trip: both forms work.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params)
 {
     if (!GEditor)
     {
@@ -2006,7 +1809,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetSelectedActors(const 
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleClearSelection(const TSharedPtr<FJsonObject>& /*Params*/)
+TSharedPtr<FJsonObject> HandleClearSelection(const TSharedPtr<FJsonObject>& /*Params*/)
 {
     if (!GEditor)
     {
@@ -2021,7 +1824,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleClearSelection(const TSh
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& /*Params*/)
+TSharedPtr<FJsonObject> HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& /*Params*/)
 {
     // Equivalent of pressing 'F' in the viewport — frames the current
     // selection. Composes with set_selected_actors so callers can "select +
@@ -2099,7 +1902,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusSelectedActors(cons
 //   offset  — echoed back
 //   limit   — echoed back
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFindActors(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFindActors(const TSharedPtr<FJsonObject>& Params)
 {
     UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
     if (!World)
@@ -2240,7 +2043,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFindActors(const TShared
 // {success: true, ...stats, errors: [{name, error}, ...]} even when some
 // items failed — callers can retry only the failed items.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActorBatch(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSpawnActorBatch(const TSharedPtr<FJsonObject>& Params)
 {
     const TArray<TSharedPtr<FJsonValue>>* ActorsJson = nullptr;
     if (!Params->TryGetArrayField(TEXT("actors"), ActorsJson) || ActorsJson == nullptr)
@@ -2307,7 +2110,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnActorBatch(const TS
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActorBatch(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleDeleteActorBatch(const TSharedPtr<FJsonObject>& Params)
 {
     const TArray<TSharedPtr<FJsonValue>>* NamesJson = nullptr;
     if (!Params->TryGetArrayField(TEXT("names"), NamesJson) || NamesJson == nullptr)
@@ -2391,7 +2194,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDeleteActorBatch(const T
 // replaces the actor lookup, then WalkPropertyPath descends as usual. Day 5
 // may collapse get/set_actor_property into thin shims over these.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params)
 {
     FString Target, Path;
     if (!Params->TryGetStringField(TEXT("target"), Target) || Target.IsEmpty())
@@ -2434,7 +2237,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetObjectProperty(const 
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params)
 {
     FString Target, Path;
     if (!Params->TryGetStringField(TEXT("target"), Target) || Target.IsEmpty())
@@ -2510,7 +2313,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetObjectProperty(const 
 // Sprites off for icons-free shots) or pivot to Game View mode for "what
 // the player sees" captures.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFrameActor(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFrameActor(const TSharedPtr<FJsonObject>& Params)
 {
     FString ActorName;
     if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
@@ -2553,7 +2356,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFrameActor(const TShared
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params)
 {
     FString FlagName;
     if (!Params->TryGetStringField(TEXT("flag"), FlagName) || FlagName.IsEmpty())
@@ -2604,7 +2407,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetShowFlag(const TShare
 // transient editor popup that landed during a sync command — typically the
 // "Importing..." progress window that lingers after finalize completion.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params)
 {
     // Optional timeout — default 60 s, the longest reasonable wait for an
     // editor mutation to complete shader+mesh compile.
@@ -2660,7 +2463,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleWaitForAsyncCompile(cons
     }
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDismissModalDialog(const TSharedPtr<FJsonObject>& /*Params*/)
+TSharedPtr<FJsonObject> HandleDismissModalDialog(const TSharedPtr<FJsonObject>& /*Params*/)
 {
     if (!FSlateApplication::IsInitialized())
     {
@@ -2700,7 +2503,7 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDismissModalDialog(const
 // Symmetry with set_actor_transform. Returns location/rotation/scale as a
 // single payload so tight loops don't need three get_actor_property calls.
 
-TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params)
 {
     FString ActorName;
     if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
@@ -2758,3 +2561,53 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorTransform(const 
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }
+
+}  // anonymous namespace
+
+
+REGISTER_MCP_COMMAND("get_actors_in_level", &HandleGetActorsInLevel);
+REGISTER_MCP_COMMAND("find_actors_by_name", &HandleFindActorsByName);
+REGISTER_MCP_COMMAND("spawn_actor", &HandleSpawnActor);
+REGISTER_MCP_COMMAND("create_actor", &HandleSpawnActor);
+REGISTER_MCP_COMMAND("spawn_static_mesh_actor", &HandleSpawnStaticMeshActor);
+REGISTER_MCP_COMMAND("set_static_mesh_actor_mesh", &HandleSetStaticMeshActorMesh);
+REGISTER_MCP_COMMAND("set_static_mesh_material", &HandleSetStaticMeshMaterial);
+REGISTER_MCP_COMMAND("delete_actor", &HandleDeleteActor);
+REGISTER_MCP_COMMAND("set_actor_transform", &HandleSetActorTransform);
+REGISTER_MCP_COMMAND("get_actor_properties", &HandleGetActorProperties);
+REGISTER_MCP_COMMAND("get_actor_property", &HandleGetActorProperty);
+REGISTER_MCP_COMMAND("set_actor_property", &HandleSetActorProperty);
+REGISTER_MCP_COMMAND("spawn_blueprint_actor", &HandleSpawnBlueprintActor);
+REGISTER_MCP_COMMAND("focus_viewport", &HandleFocusViewport);
+REGISTER_MCP_COMMAND("take_screenshot", &HandleTakeScreenshot);
+REGISTER_MCP_COMMAND("get_viewport_camera", &HandleGetViewportCamera);
+REGISTER_MCP_COMMAND("set_viewport_camera", &HandleSetViewportCamera);
+REGISTER_MCP_COMMAND("execute_console_command", &HandleExecuteConsoleCommand);
+REGISTER_MCP_COMMAND("set_cvar", &HandleSetCVar);
+REGISTER_MCP_COMMAND("get_cvar", &HandleGetCVar);
+REGISTER_MCP_COMMAND("get_viewport_mode", &HandleGetViewportMode);
+REGISTER_MCP_COMMAND("set_viewport_mode", &HandleSetViewportMode);
+REGISTER_MCP_COMMAND("read_output_log", &HandleReadOutputLog);
+REGISTER_MCP_COMMAND("get_async_compile_status", &HandleGetAsyncCompileStatus);
+REGISTER_MCP_COMMAND("start_pie", &HandleStartPIE);
+REGISTER_MCP_COMMAND("stop_pie", &HandleStopPIE);
+REGISTER_MCP_COMMAND("is_pie_active", &HandleIsPIEActive);
+REGISTER_MCP_COMMAND("pie_get_player", &HandlePIEGetPlayer);
+REGISTER_MCP_COMMAND("pie_set_player", &HandlePIESetPlayer);
+REGISTER_MCP_COMMAND("pie_apply_movement", &HandlePIEApplyMovement);
+REGISTER_MCP_COMMAND("pie_screenshot", &HandlePIEScreenshot);
+REGISTER_MCP_COMMAND("get_selected_actors", &HandleGetSelectedActors);
+REGISTER_MCP_COMMAND("recompile_live", &HandleRecompileLive);
+REGISTER_MCP_COMMAND("set_selected_actors", &HandleSetSelectedActors);
+REGISTER_MCP_COMMAND("clear_selection", &HandleClearSelection);
+REGISTER_MCP_COMMAND("focus_selected_actors", &HandleFocusSelectedActors);
+REGISTER_MCP_COMMAND("find_actors", &HandleFindActors);
+REGISTER_MCP_COMMAND("spawn_actor_batch", &HandleSpawnActorBatch);
+REGISTER_MCP_COMMAND("delete_actor_batch", &HandleDeleteActorBatch);
+REGISTER_MCP_COMMAND("get_object_property", &HandleGetObjectProperty);
+REGISTER_MCP_COMMAND("set_object_property", &HandleSetObjectProperty);
+REGISTER_MCP_COMMAND("frame_actor", &HandleFrameActor);
+REGISTER_MCP_COMMAND("set_show_flag", &HandleSetShowFlag);
+REGISTER_MCP_COMMAND("wait_for_async_compile", &HandleWaitForAsyncCompile);
+REGISTER_MCP_COMMAND("dismiss_modal_dialog", &HandleDismissModalDialog);
+REGISTER_MCP_COMMAND("get_actor_transform", &HandleGetActorTransform);

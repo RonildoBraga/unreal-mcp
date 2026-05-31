@@ -28,8 +28,6 @@
 #include "Dom/JsonObject.h"
 
 #include "MCPRegistry.h"
-#include "Commands/UnrealMCPBlueprintCommands.h"
-#include "Commands/UnrealMCPBlueprintNodeCommands.h"
 
 #include <initializer_list>
 
@@ -91,27 +89,8 @@ namespace
 
 			// editor.* self-registers in Commands/UnrealMCPEditorCommands.cpp.
 
-			RegBatch<FUnrealMCPBlueprintCommands>({
-				TEXT("create_blueprint"),
-				TEXT("add_component_to_blueprint"),
-				TEXT("set_component_property"),
-				TEXT("set_physics_properties"),
-				TEXT("compile_blueprint"),
-				TEXT("set_blueprint_property"),
-				TEXT("set_static_mesh_properties"),
-				TEXT("set_pawn_properties"),
-			});
-
-			RegBatch<FUnrealMCPBlueprintNodeCommands>({
-				TEXT("connect_blueprint_nodes"),
-				TEXT("add_blueprint_get_self_component_reference"),
-				TEXT("add_blueprint_self_reference"),
-				TEXT("find_blueprint_nodes"),
-				TEXT("add_blueprint_event_node"),
-				TEXT("add_blueprint_input_action_node"),
-				TEXT("add_blueprint_function_node"),
-				TEXT("add_blueprint_variable"),
-			});
+			// blueprint.* self-registers in Commands/UnrealMCPBlueprintCommands.cpp.
+			// blueprint_node.* self-registers in Commands/UnrealMCPBlueprintNodeCommands.cpp.
 
 			// project.* — create_input_mapping, get_ini, set_ini, execute_python
 			// now self-register via REGISTER_MCP_COMMAND at handler definition

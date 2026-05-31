@@ -1,4 +1,4 @@
-#include "Commands/UnrealMCPBlueprintCommands.h"
+#include "MCPRegistry.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -21,51 +21,13 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
 
-FUnrealMCPBlueprintCommands::FUnrealMCPBlueprintCommands()
+namespace
 {
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    if (CommandType == TEXT("create_blueprint"))
-    {
-        return HandleCreateBlueprint(Params);
-    }
-    else if (CommandType == TEXT("add_component_to_blueprint"))
-    {
-        return HandleAddComponentToBlueprint(Params);
-    }
-    else if (CommandType == TEXT("set_component_property"))
-    {
-        return HandleSetComponentProperty(Params);
-    }
-    else if (CommandType == TEXT("set_physics_properties"))
-    {
-        return HandleSetPhysicsProperties(Params);
-    }
-    else if (CommandType == TEXT("compile_blueprint"))
-    {
-        return HandleCompileBlueprint(Params);
-    }
-    // Note: spawn_blueprint_actor lives in FUnrealMCPEditorCommands. The bridge
-    // routes it exclusively to Editor; this category dispatch never sees it.
-    else if (CommandType == TEXT("set_blueprint_property"))
-    {
-        return HandleSetBlueprintProperty(Params);
-    }
-    else if (CommandType == TEXT("set_static_mesh_properties"))
-    {
-        return HandleSetStaticMeshProperties(Params);
-    }
-    else if (CommandType == TEXT("set_pawn_properties"))
-    {
-        return HandleSetPawnProperties(Params);
-    }
-    
-    return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCreateBlueprint(const TSharedPtr<FJsonObject>& Params)
+
+
+TSharedPtr<FJsonObject> HandleCreateBlueprint(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -160,7 +122,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCreateBlueprint(const
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create blueprint"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleAddComponentToBlueprint(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddComponentToBlueprint(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -258,7 +220,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleAddComponentToBluepri
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to add component to blueprint"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -747,7 +709,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetComponentProperty(
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetPhysicsProperties(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetPhysicsProperties(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -823,7 +785,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetPhysicsProperties(
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCompileBlueprint(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleCompileBlueprint(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -854,7 +816,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCompileBlueprint(cons
 // See UnrealMCPEditorCommands::HandleSpawnBlueprintActor for the canonical
 // implementation.
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetBlueprintProperty(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetBlueprintProperty(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -908,7 +870,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetBlueprintProperty(
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetStaticMeshProperties(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetStaticMeshProperties(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -981,7 +943,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetStaticMeshProperti
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetPawnProperties(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetPawnProperties(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -1105,4 +1067,16 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetPawnProperties(con
     ResponseObj->SetBoolField(TEXT("success"), bAnyPropertiesSet);
     ResponseObj->SetObjectField(TEXT("results"), ResultsObj);
     return ResponseObj;
-} 
+}
+
+}  // anonymous namespace
+
+
+REGISTER_MCP_COMMAND("create_blueprint", &HandleCreateBlueprint);
+REGISTER_MCP_COMMAND("add_component_to_blueprint", &HandleAddComponentToBlueprint);
+REGISTER_MCP_COMMAND("set_component_property", &HandleSetComponentProperty);
+REGISTER_MCP_COMMAND("set_physics_properties", &HandleSetPhysicsProperties);
+REGISTER_MCP_COMMAND("compile_blueprint", &HandleCompileBlueprint);
+REGISTER_MCP_COMMAND("set_blueprint_property", &HandleSetBlueprintProperty);
+REGISTER_MCP_COMMAND("set_static_mesh_properties", &HandleSetStaticMeshProperties);
+REGISTER_MCP_COMMAND("set_pawn_properties", &HandleSetPawnProperties);

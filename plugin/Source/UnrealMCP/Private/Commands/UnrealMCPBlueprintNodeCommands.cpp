@@ -1,4 +1,4 @@
-#include "Commands/UnrealMCPBlueprintNodeCommands.h"
+#include "MCPRegistry.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -17,52 +17,16 @@
 #include "Kismet/GameplayStatics.h"
 #include "EdGraphSchema_K2.h"
 
+namespace
+{
+
+
 // Declare the log category
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCP, Log, All);
 
-FUnrealMCPBlueprintNodeCommands::FUnrealMCPBlueprintNodeCommands()
-{
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    if (CommandType == TEXT("connect_blueprint_nodes"))
-    {
-        return HandleConnectBlueprintNodes(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_get_self_component_reference"))
-    {
-        return HandleAddBlueprintGetSelfComponentReference(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_event_node"))
-    {
-        return HandleAddBlueprintEvent(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_function_node"))
-    {
-        return HandleAddBlueprintFunctionCall(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_variable"))
-    {
-        return HandleAddBlueprintVariable(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_input_action_node"))
-    {
-        return HandleAddBlueprintInputActionNode(Params);
-    }
-    else if (CommandType == TEXT("add_blueprint_self_reference"))
-    {
-        return HandleAddBlueprintSelfReference(Params);
-    }
-    else if (CommandType == TEXT("find_blueprint_nodes"))
-    {
-        return HandleFindBlueprintNodes(Params);
-    }
-    
-    return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint node command: %s"), *CommandType));
-}
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleConnectBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleConnectBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -144,7 +108,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleConnectBlueprintN
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to connect nodes"));
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintGetSelfComponentReference(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintGetSelfComponentReference(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -214,7 +178,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintGetSe
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintEvent(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintEvent(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -265,7 +229,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintEvent
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintFunctionCall(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintFunctionCall(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -670,7 +634,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintFunct
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintVariable(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintVariable(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -767,7 +731,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintVaria
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintInputActionNode(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintInputActionNode(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -818,7 +782,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintInput
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintSelfReference(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleAddBlueprintSelfReference(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -863,7 +827,7 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleAddBlueprintSelfR
     return ResultObj;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleFindBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleFindBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
 {
     // Get required parameters
     FString BlueprintName;
@@ -921,4 +885,16 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintNodeCommands::HandleFindBlueprintNode
     ResultObj->SetArrayField(TEXT("node_guids"), NodeGuidArray);
     
     return ResultObj;
-} 
+}
+
+}  // anonymous namespace
+
+
+REGISTER_MCP_COMMAND("connect_blueprint_nodes", &HandleConnectBlueprintNodes);
+REGISTER_MCP_COMMAND("add_blueprint_get_self_component_reference", &HandleAddBlueprintGetSelfComponentReference);
+REGISTER_MCP_COMMAND("add_blueprint_event_node", &HandleAddBlueprintEvent);
+REGISTER_MCP_COMMAND("add_blueprint_function_node", &HandleAddBlueprintFunctionCall);
+REGISTER_MCP_COMMAND("add_blueprint_variable", &HandleAddBlueprintVariable);
+REGISTER_MCP_COMMAND("add_blueprint_input_action_node", &HandleAddBlueprintInputActionNode);
+REGISTER_MCP_COMMAND("add_blueprint_self_reference", &HandleAddBlueprintSelfReference);
+REGISTER_MCP_COMMAND("find_blueprint_nodes", &HandleFindBlueprintNodes);

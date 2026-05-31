@@ -57,4 +57,7 @@ private:
     TSharedPtr<FJsonObject> HandlePIESetPlayer(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandlePIEApplyMovement(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandlePIEScreenshot(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.7.12 — read the editor's current actor selection
+    TSharedPtr<FJsonObject> HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params);
 };

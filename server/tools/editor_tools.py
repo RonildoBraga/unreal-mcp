@@ -1092,4 +1092,44 @@ def register_editor_tools(mcp: FastMCP):
             logger.error(f"pie_screenshot error: {e}")
             return {"success": False, "message": str(e)}
 
+    @mcp.tool()
+    def get_selected_actors(ctx: Context) -> Dict[str, Any]:
+        """Read the editor's current actor selection (v0.7.12).
+
+        Returns the actors currently selected in the viewport / Outliner.
+        Useful for capturing a hand-curated subset of a large scene
+        (e.g. "the foreground candle clusters + lanterns + floor tiles I
+        picked") without describing them from a screenshot.
+
+        Returns:
+            {
+              "actors": [
+                {
+                  "name": "<display label>",
+                  "internal_name": "<UObject name>",
+                  "class": "...",
+                  "folder_path": "Outliner/folder/path",
+                  "location": [x, y, z]
+                },
+                ...
+              ],
+              "count": N,
+              "success": bool
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("get_selected_actors", {})
+            if not response:
+                return {"success": False, "message": "No response"}
+            if response.get("status") == "error":
+                return {"success": False, "message": response.get("error", "Unknown error")}
+            return response
+        except Exception as e:
+            logger.error(f"get_selected_actors error: {e}")
+            return {"success": False, "message": str(e)}
+
     logger.info("Editor tools registered successfully")

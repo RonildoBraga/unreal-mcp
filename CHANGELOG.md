@@ -4,6 +4,30 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.7.12] — 2026-05-31 — get_selected_actors
+
+User-requested patch surfaced during RomanCave (Megascans Fab showcase)
+investigation: the user hand-picked a curated subset of actors in the
+viewport to use as the L_Base replication target, but the selection was
+hundreds of small items (floor tiles + candle clusters + lanterns +
+debris) that no screenshot could realistically read.
+
+### New tool
+
+- **`get_selected_actors()`** — Returns
+  `{actors: [{name, internal_name, class, folder_path, location}, ...],
+  count, success}`. Iterates `GEditor->GetSelectedActors()` and packs
+  per-actor metadata. Light enough to use against a 500-actor
+  selection; per-actor heavy reads still go through `get_actor_property`.
+
+### Why this matters
+
+Closes the loop on selection-based workflows. Combined with the v0.7.11
+PIE oracle + v0.7.10 get_actor_property, a curated subset of any scene
+can now be captured, inspected, and replicated programmatically.
+
+Verified: full UBT rebuild of `LauderEditor` passes after the changes.
+
 ## [0.7.11] — 2026-05-31 — PIE control + player state + in-game screenshot (self-verification)
 
 User-requested patch (2026-05-31) after Phase 7.2 of lauder3 surfaced a

@@ -169,6 +169,11 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandlePIEScreenshot(Params);
     }
+    // v0.7.12 — selection introspection
+    else if (CommandType == TEXT("get_selected_actors"))
+    {
+        return HandleGetSelectedActors(Params);
+    }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
@@ -1696,6 +1701,63 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandlePIEScreenshot(const TSha
     Result->SetStringField(TEXT("path"), OutputPath);
     Result->SetNumberField(TEXT("width"), Viewport->GetSizeXY().X);
     Result->SetNumberField(TEXT("height"), Viewport->GetSizeXY().Y);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.7.12 — read the editor's current actor selection ─────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+{
+    // Returns the current viewport / Outliner actor selection. Used to capture
+    // a hand-curated subset of a scene (e.g. "the candle clusters + lanterns +
+    // floor tiles in the foreground" of a large showcase scene) without making
+    // the client guess from screenshots.
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (!Selection)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Selection subsystem unavailable"));
+    }
+
+    TArray<TSharedPtr<FJsonValue>> ActorsJson;
+    const int32 Num = Selection->Num();
+    ActorsJson.Reserve(Num);
+
+    for (int32 i = 0; i < Num; i++)
+    {
+        AActor* Actor = Cast<AActor>(Selection->GetSelectedObject(i));
+        if (!Actor) continue;
+
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("name"), Actor->GetActorLabel());
+        Obj->SetStringField(TEXT("internal_name"), Actor->GetName());
+        Obj->SetStringField(TEXT("class"), Actor->GetClass()->GetName());
+
+        const FName FolderPath = Actor->GetFolderPath();
+        Obj->SetStringField(TEXT("folder_path"), FolderPath.IsNone() ? FString() : FolderPath.ToString());
+
+        // Lightweight transform so the caller can decide what to do without
+        // re-querying per-actor. Heavier per-property reads still go through
+        // get_actor_property.
+        const FVector L = Actor->GetActorLocation();
+        TArray<TSharedPtr<FJsonValue>> Loc;
+        Loc.Add(MakeShared<FJsonValueNumber>(L.X));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Y));
+        Loc.Add(MakeShared<FJsonValueNumber>(L.Z));
+        Obj->SetArrayField(TEXT("location"), Loc);
+
+        ActorsJson.Add(MakeShared<FJsonValueObject>(Obj));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetArrayField(TEXT("actors"), ActorsJson);
+    Result->SetNumberField(TEXT("count"), ActorsJson.Num());
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

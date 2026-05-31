@@ -266,7 +266,8 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("pie_get_player") ||
                      CommandType == TEXT("pie_set_player") ||
                      CommandType == TEXT("pie_apply_movement") ||
-                     CommandType == TEXT("pie_screenshot"))
+                     CommandType == TEXT("pie_screenshot") ||
+                     CommandType == TEXT("get_selected_actors"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }

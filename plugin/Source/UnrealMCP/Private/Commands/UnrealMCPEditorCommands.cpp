@@ -174,6 +174,11 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandleGetSelectedActors(Params);
     }
+    // v0.8.0 Day 2c-i+ — programmatic Live Coding rebuild
+    else if (CommandType == TEXT("recompile_live"))
+    {
+        return HandleRecompileLive(Params);
+    }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
@@ -1760,4 +1765,54 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetSelectedActors(const 
     Result->SetNumberField(TEXT("count"), ActorsJson.Num());
     Result->SetBoolField(TEXT("success"), true);
     return Result;
+}
+
+
+// v0.8.0 Day 2c-i+ — programmatic Live Coding rebuild.
+//
+// Discovery: UE 5.7's `LiveCoding.Compile` console command IS the recompile
+// primitive — fires the same async build that Ctrl+Alt+F11 triggers. We
+// could expose this only via the existing `execute_console_command` tool,
+// but a named MCP command gives us:
+//   - A discoverable verb in tools/list
+//   - One place to add sync-wait or status-poll behavior later
+//   - Clearer intent in the autonomous-build loop (sync source →
+//     recompile_live → sleep → re-test)
+//
+// Implementation is intentionally a thin shim — Live Coding is async on
+// UE's side; the editor logs "LogLiveCoding: Live coding succeeded" or
+// "LogLiveCoding: Live coding failed" ~20-30 seconds later. Callers that
+// need to wait can tail the log via read_output_log (or sleep, which is
+// what most autonomous workflows will do).
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleRecompileLive(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor unavailable"));
+    }
+    if (!GEngine)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEngine unavailable"));
+    }
+
+    UWorld* World = GEditor->GetEditorWorldContext().World();
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Route through the standard console-command dispatch. Exec returns
+    // true if the command was recognized; the actual compile is async.
+    const bool bAccepted = GEngine->Exec(World, TEXT("LiveCoding.Compile"));
+    if (!bAccepted)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("LiveCoding.Compile not accepted by console — is Live Coding enabled in Editor Preferences?"));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("started"), true);
+    Result->SetStringField(TEXT("note"),
+        TEXT("Live Coding compile started. Tail the log (read_output_log) or sleep ~30s for 'Live coding succeeded' before invoking further changes."));
+    return FUnrealMCPCommonUtils::CreateSuccessResponse(Result);
 }

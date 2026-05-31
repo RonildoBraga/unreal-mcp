@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from tools._common import _unwrap
+
 try:
     # FastMCP's Image content type — lets tools return image bytes inline
     # so the LLM sees the screenshot rather than just a file path.
@@ -1131,5 +1133,39 @@ def register_editor_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"get_selected_actors error: {e}")
             return {"success": False, "message": str(e)}
+
+    @mcp.tool()
+    def recompile_live(ctx: Context) -> Dict[str, Any]:
+        """Trigger an Unreal Live Coding rebuild of the plugin's C++ module.
+
+        Same effect as pressing Ctrl+Alt+F11 inside the editor: UE detects
+        modified source files and patches the running DLLs in place — no
+        editor restart required.
+
+        Use this after syncing C++ source changes (typical autonomous loop):
+
+            1. Edit / Write the .cpp / .h files on disk
+            2. (Mirror them into the lauder3 plugin snapshot if needed)
+            3. Call `recompile_live()`
+            4. Wait ~30 seconds (Live Coding is async)
+            5. Tools added or changed in the new source are now callable
+
+        UE logs `LogLiveCoding: Live coding succeeded` (or `failed`) when
+        the patch completes. Use `read_output_log(lines=N)` to verify.
+
+        Returns:
+            On success: {"started": True, "note": "...", "success": True}
+            If Live Coding is disabled in Editor Preferences or no editor
+            world is available: {"success": False, "error": "..."}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "error": "Failed to connect to Unreal Engine"}
+            return _unwrap(unreal.send_command("recompile_live", {}))
+        except Exception as e:
+            logger.error(f"recompile_live error: {e}")
+            return {"success": False, "error": str(e)}
 
     logger.info("Editor tools registered successfully")

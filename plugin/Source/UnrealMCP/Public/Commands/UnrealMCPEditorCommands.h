@@ -60,4 +60,7 @@ private:
 
     // v0.7.12 — read the editor's current actor selection
     TSharedPtr<FJsonObject> HandleGetSelectedActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 2c-i+ — trigger Live Coding compile (no editor restart needed)
+    TSharedPtr<FJsonObject> HandleRecompileLive(const TSharedPtr<FJsonObject>& Params);
 };

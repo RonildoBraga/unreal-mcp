@@ -2,6 +2,10 @@
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Reflection/ClassLookup.h"
 #include "Reflection/ObjectLookup.h"
+// v0.8.0 Day 3-4 — show flags + Slate modal dismiss + async compile wait.
+#include "ShowFlags.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SWindow.h"
 #include "Editor.h"
 #include "EditorViewportClient.h"
 #include "LevelEditorViewport.h"
@@ -213,6 +217,26 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     else if (CommandType == TEXT("set_object_property"))
     {
         return HandleSetObjectProperty(Params);
+    }
+    else if (CommandType == TEXT("frame_actor"))
+    {
+        return HandleFrameActor(Params);
+    }
+    else if (CommandType == TEXT("set_show_flag"))
+    {
+        return HandleSetShowFlag(Params);
+    }
+    else if (CommandType == TEXT("wait_for_async_compile"))
+    {
+        return HandleWaitForAsyncCompile(Params);
+    }
+    else if (CommandType == TEXT("dismiss_modal_dialog"))
+    {
+        return HandleDismissModalDialog(Params);
+    }
+    else if (CommandType == TEXT("get_actor_transform"))
+    {
+        return HandleGetActorTransform(Params);
     }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
@@ -2470,6 +2494,267 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetObjectProperty(const 
         Found.ContainerType ? Found.ContainerType->GetName() : FString());
     Result->SetStringField(TEXT("owning_object_class"),
         Found.OwningObject ? Found.OwningObject->GetClass()->GetName() : FString());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — viewport: frame_actor + set_show_flag ─────────────────
+//
+// frame_actor is the auto-fit complement of focus_selected_actors — caller
+// passes a name instead of pre-staging a selection. Useful when the agent
+// just spawned something and wants to verify it's where expected.
+//
+// set_show_flag toggles individual FEngineShowFlags entries — Game View,
+// Sprites, Bounds, Lighting, etc. Used to clean up screenshots (toggle
+// Sprites off for icons-free shots) or pivot to Game View mode for "what
+// the player sees" captures.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFrameActor(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Two-pass lookup: display label, then internal name — matches the
+    // set_selected_actors convention.
+    AActor* Target = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* A : AllActors)
+    {
+        if (A && A->GetActorLabel() == ActorName) { Target = A; break; }
+    }
+    if (!Target)
+    {
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetName() == ActorName) { Target = A; break; }
+        }
+    }
+    if (!Target)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    GEditor->MoveViewportCamerasToActor(*Target, /*bActiveViewportOnly=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("framed"), Target->GetActorLabel());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params)
+{
+    FString FlagName;
+    if (!Params->TryGetStringField(TEXT("flag"), FlagName) || FlagName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'flag' parameter"));
+    }
+    bool bEnabled = false;
+    if (!Params->TryGetBoolField(TEXT("enabled"), bEnabled))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'enabled' parameter (boolean)"));
+    }
+
+    if (!GCurrentLevelEditingViewportClient)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active level editing viewport"));
+    }
+
+    const int32 FlagIndex = FEngineShowFlags::FindIndexByName(*FlagName);
+    if (FlagIndex == INDEX_NONE)
+    {
+        // FindIndexByName matches the C++ CODE name, not the editor display
+        // label. Many flags have a different display name than code name —
+        // e.g. "Sprites" is shown to users but the code symbol is
+        // BillboardSprites. The list below uses code names.
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Unknown show flag: '%s'. Use the code name (BillboardSprites, Bounds, Grid, Lighting, PostProcessing, Game, Atmosphere, etc.) not the editor display label."),
+                *FlagName));
+    }
+
+    FEngineShowFlags& Flags = GCurrentLevelEditingViewportClient->EngineShowFlags;
+    Flags.SetSingleFlag(FlagIndex, bEnabled);
+    GCurrentLevelEditingViewportClient->Invalidate();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("flag"), FlagName);
+    Result->SetBoolField(TEXT("enabled"), bEnabled);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — console: wait_for_async_compile + dismiss_modal ───────
+//
+// finalize_migration (#39 in the catalog) is known to block on mesh + shader
+// compilation kicked off by migrate_assets. The async-compile wait lets
+// callers explicitly drain the queue before proceeding, with a timeout so
+// we don't deadlock if something jams. The modal-dismiss helper closes any
+// transient editor popup that landed during a sync command — typically the
+// "Importing..." progress window that lingers after finalize completion.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params)
+{
+    // Optional timeout — default 60 s, the longest reasonable wait for an
+    // editor mutation to complete shader+mesh compile.
+    double TimeoutSeconds = 60.0;
+    Params->TryGetNumberField(TEXT("timeout_seconds"), TimeoutSeconds);
+    if (TimeoutSeconds <= 0.0) TimeoutSeconds = 60.0;
+
+    const double StartSeconds = FPlatformTime::Seconds();
+    int32 LoopCount = 0;
+
+    // Tick the engine inside the wait loop so async compile actually makes
+    // progress. FAssetCompilingManager + GShaderCompilingManager both feed
+    // off the game thread's tick — without it they'd never finish.
+    while (true)
+    {
+        const int32 Remaining =
+            (GShaderCompilingManager ? GShaderCompilingManager->GetNumRemainingJobs() : 0) +
+            FAssetCompilingManager::Get().GetNumRemainingAssets();
+        if (Remaining == 0)
+        {
+            TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+            Result->SetNumberField(TEXT("elapsed_seconds"), FPlatformTime::Seconds() - StartSeconds);
+            Result->SetNumberField(TEXT("iterations"), LoopCount);
+            Result->SetBoolField(TEXT("success"), true);
+            return Result;
+        }
+
+        const double Elapsed = FPlatformTime::Seconds() - StartSeconds;
+        if (Elapsed > TimeoutSeconds)
+        {
+            TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+            Result->SetNumberField(TEXT("elapsed_seconds"), Elapsed);
+            Result->SetNumberField(TEXT("iterations"), LoopCount);
+            Result->SetNumberField(TEXT("remaining_jobs"), Remaining);
+            Result->SetBoolField(TEXT("timed_out"), true);
+            Result->SetBoolField(TEXT("success"), false);
+            Result->SetStringField(TEXT("error"),
+                FString::Printf(TEXT("Timed out after %.1fs with %d jobs still pending"),
+                    Elapsed, Remaining));
+            return Result;
+        }
+
+        // Drive the compile pumps. FinishAllCompilation is blocking but
+        // sliced — it returns when its internal slice ends, not when ALL
+        // work finishes. Loop wraps it in the timeout guard.
+        FAssetCompilingManager::Get().ProcessAsyncTasks();
+        if (GShaderCompilingManager)
+        {
+            GShaderCompilingManager->ProcessAsyncResults(false, false);
+        }
+        FPlatformProcess::Sleep(0.1f);
+        LoopCount++;
+    }
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleDismissModalDialog(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!FSlateApplication::IsInitialized())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Slate not initialized"));
+    }
+
+    FSlateApplication& Slate = FSlateApplication::Get();
+    int32 DismissedCount = 0;
+
+    // Best-effort dismiss — popup menus, hover tooltips, then any open
+    // modal windows. Modal windows in UE are SWindow instances that
+    // `Slate.GetActiveTopLevelWindow()` reports. We close them via
+    // RequestDestroyWindow which respects the window's close-confirmation
+    // logic (won't accidentally drop unsaved changes from a save dialog).
+    Slate.DismissAllMenus();
+    DismissedCount++;  // count the menu dismiss as one action even if nothing was up
+
+    TArray<TSharedRef<SWindow>> Windows = Slate.GetTopLevelWindows();
+    for (const TSharedRef<SWindow>& W : Windows)
+    {
+        if (W->IsModalWindow())
+        {
+            Slate.RequestDestroyWindow(W);
+            DismissedCount++;
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("dismissed_count"), DismissedCount);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — read counterpart: get_actor_transform ─────────────────
+//
+// Symmetry with set_actor_transform. Returns location/rotation/scale as a
+// single payload so tight loops don't need three get_actor_property calls.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    AActor* Target = nullptr;
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+    for (AActor* A : AllActors)
+    {
+        if (A && A->GetActorLabel() == ActorName) { Target = A; break; }
+    }
+    if (!Target)
+    {
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetName() == ActorName) { Target = A; break; }
+        }
+    }
+    if (!Target)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    auto MakeVec = [](const FVector& V) {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(V.X));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Y));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Z));
+        return Arr;
+    };
+    auto MakeRot = [](const FRotator& R) {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Pitch));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Yaw));
+        Arr.Add(MakeShared<FJsonValueNumber>(R.Roll));
+        return Arr;
+    };
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), Target->GetActorLabel());
+    Result->SetStringField(TEXT("internal_name"), Target->GetName());
+    Result->SetArrayField(TEXT("location"), MakeVec(Target->GetActorLocation()));
+    Result->SetArrayField(TEXT("rotation"), MakeRot(Target->GetActorRotation()));
+    Result->SetArrayField(TEXT("scale"), MakeVec(Target->GetActorScale3D()));
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

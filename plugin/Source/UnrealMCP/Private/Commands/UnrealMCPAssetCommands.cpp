@@ -12,6 +12,13 @@
 #include "AssetToolsModule.h"
 #include "AssetImportTask.h"
 #include "IAssetTools.h"
+// v0.8.0 Day 3-4 — Content Browser sync + asset editor + static mesh inspection.
+#include "ContentBrowserModule.h"
+#include "IContentBrowserSingleton.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
 
 namespace
 {
@@ -81,6 +88,10 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleCommand(const FString& Co
     if (CommandType == TEXT("migrate_assets"))         return HandleMigrateAssets(Params);
     if (CommandType == TEXT("import_asset"))           return HandleImportAsset(Params);
     if (CommandType == TEXT("finalize_migration"))     return HandleFinalizeMigration(Params);
+    if (CommandType == TEXT("focus_in_browser"))       return HandleFocusInBrowser(Params);
+    if (CommandType == TEXT("navigate_to_folder"))     return HandleNavigateToFolder(Params);
+    if (CommandType == TEXT("open_in_editor"))         return HandleOpenInEditor(Params);
+    if (CommandType == TEXT("static_mesh_get_info"))   return HandleStaticMeshGetInfo(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown asset command: %s"), *CommandType));
@@ -850,4 +861,201 @@ TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFinalizeMigration(const T
                  "overall call returned false."));
     }
     return Out;
+}
+
+
+// ─── v0.8.0 Day 3-4 — cooperative workflows: point user at our work ──────────
+//
+// When the agent does something in the Content Browser, the human user often
+// wants to see what happened (verify before, after, or as it goes). These
+// three tools surface our work — no state change, just a viewport sync.
+//
+//   focus_in_browser(asset_path)     — scrolls to + highlights the asset
+//   navigate_to_folder(folder_path)  — pivots the Content Browser to a folder
+//   open_in_editor(asset_path)       — opens the asset's dedicated editor
+//                                       (material editor, BP editor, etc.)
+//
+// Path conventions match list_assets: "/Game/Lauder/Materials/M_Stone" (no
+// .Asset suffix needed — we tolerate both with and without).
+
+namespace
+{
+    // Strip a trailing ".Name" object suffix and re-resolve. UE returns full
+    // ObjectPath strings ("/Game/Foo.Foo") from list_assets but folder operations
+    // want just the package path ("/Game/Foo"). LoadObject handles both, but
+    // this helper makes intent explicit for callers that pass either.
+    UObject* LoadAssetByPath(const FString& AssetPath)
+    {
+        if (AssetPath.IsEmpty()) return nullptr;
+        UObject* Loaded = LoadObject<UObject>(nullptr, *AssetPath);
+        if (Loaded) return Loaded;
+
+        // Fallback: caller passed package path without object name.
+        int32 LastSlash = INDEX_NONE;
+        AssetPath.FindLastChar(TEXT('/'), LastSlash);
+        if (LastSlash == INDEX_NONE) return nullptr;
+        const FString LeafName = AssetPath.Mid(LastSlash + 1);
+        const FString FullPath = FString::Printf(TEXT("%s.%s"), *AssetPath, *LeafName);
+        return LoadObject<UObject>(nullptr, *FullPath);
+    }
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleFocusInBrowser(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+    }
+
+    UObject* Asset = LoadAssetByPath(AssetPath);
+    if (!Asset)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+    }
+
+    FContentBrowserModule& CBM = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+    TArray<UObject*> Assets = { Asset };
+    CBM.Get().SyncBrowserToAssets(Assets);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("asset_path"), Asset->GetPathName());
+    Result->SetStringField(TEXT("asset_class"), Asset->GetClass()->GetName());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleNavigateToFolder(const TSharedPtr<FJsonObject>& Params)
+{
+    FString FolderPath;
+    if (!Params->TryGetStringField(TEXT("folder_path"), FolderPath) || FolderPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'folder_path' parameter"));
+    }
+
+    // Normalize: caller may pass "/Game/Lauder" or just "/Lauder" — the
+    // Content Browser wants a virtual-tree path starting with /Game/ or
+    // similar mount root. Bare names get a /Game/ prefix.
+    if (!FolderPath.StartsWith(TEXT("/")))
+    {
+        FolderPath = FString::Printf(TEXT("/Game/%s"), *FolderPath);
+    }
+
+    FContentBrowserModule& CBM = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+    TArray<FString> Folders = { FolderPath };
+    CBM.Get().SyncBrowserToFolders(Folders);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("folder_path"), FolderPath);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleOpenInEditor(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+    }
+
+    UObject* Asset = LoadAssetByPath(AssetPath);
+    if (!Asset)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+    }
+
+    UAssetEditorSubsystem* Subsys = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+    if (!Subsys)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("UAssetEditorSubsystem unavailable"));
+    }
+    const bool bOpened = Subsys->OpenEditorForAsset(Asset);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("asset_path"), Asset->GetPathName());
+    Result->SetStringField(TEXT("asset_class"), Asset->GetClass()->GetName());
+    Result->SetBoolField(TEXT("opened"), bOpened);
+    Result->SetBoolField(TEXT("success"), bOpened);
+    if (!bOpened)
+    {
+        Result->SetStringField(TEXT("error"),
+            FString::Printf(TEXT("No registered editor for class %s"), *Asset->GetClass()->GetName()));
+    }
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — static-mesh bounds + slot inspection ──────────────────
+//
+// Before placing a Megascans asset at scale we need to know how big it is
+// and what material slots it exposes. Eyeballing from screenshots is wrong
+// for sub-meter and over-100m assets. This returns the local-space bounding
+// box (extent + center), the world-space scaled version derivable from a
+// caller-supplied scale, and the material slot list with current default
+// assignments.
+
+TSharedPtr<FJsonObject> FUnrealMCPAssetCommands::HandleStaticMeshGetInfo(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+    }
+
+    UObject* Asset = LoadAssetByPath(AssetPath);
+    UStaticMesh* Mesh = Cast<UStaticMesh>(Asset);
+    if (!Mesh)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Asset is not a UStaticMesh: %s"), *AssetPath));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("asset_path"), Mesh->GetPathName());
+
+    // Bounds — local-space, before any actor scale.
+    const FBox Box = Mesh->GetBoundingBox();
+    auto MakeVecArray = [](const FVector& V) {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(V.X));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Y));
+        Arr.Add(MakeShared<FJsonValueNumber>(V.Z));
+        return Arr;
+    };
+    const FVector Center = Box.GetCenter();
+    const FVector Extent = Box.GetExtent();  // half-size
+
+    TSharedPtr<FJsonObject> BoundsObj = MakeShared<FJsonObject>();
+    BoundsObj->SetArrayField(TEXT("center"), MakeVecArray(Center));
+    BoundsObj->SetArrayField(TEXT("extent"), MakeVecArray(Extent));         // half-size
+    BoundsObj->SetArrayField(TEXT("size"), MakeVecArray(Extent * 2.0f));    // full size
+    BoundsObj->SetArrayField(TEXT("min"), MakeVecArray(Box.Min));
+    BoundsObj->SetArrayField(TEXT("max"), MakeVecArray(Box.Max));
+    Result->SetObjectField(TEXT("bounds"), BoundsObj);
+
+    // Material slots — slot name + current default material asset path (if any).
+    TArray<TSharedPtr<FJsonValue>> SlotsJson;
+    const TArray<FStaticMaterial>& Materials = Mesh->GetStaticMaterials();
+    SlotsJson.Reserve(Materials.Num());
+    for (int32 i = 0; i < Materials.Num(); ++i)
+    {
+        const FStaticMaterial& Slot = Materials[i];
+        TSharedPtr<FJsonObject> SlotObj = MakeShared<FJsonObject>();
+        SlotObj->SetNumberField(TEXT("index"), i);
+        SlotObj->SetStringField(TEXT("slot_name"), Slot.MaterialSlotName.ToString());
+        SlotObj->SetStringField(TEXT("material"),
+            Slot.MaterialInterface ? Slot.MaterialInterface->GetPathName() : FString());
+        SlotsJson.Add(MakeShared<FJsonValueObject>(SlotObj));
+    }
+    Result->SetArrayField(TEXT("material_slots"), SlotsJson);
+    Result->SetNumberField(TEXT("slot_count"), SlotsJson.Num());
+
+    // LOD count — cheap, sometimes needed for "is this a high-poly hero mesh?"
+    Result->SetNumberField(TEXT("lod_count"), Mesh->GetNumLODs());
+
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }

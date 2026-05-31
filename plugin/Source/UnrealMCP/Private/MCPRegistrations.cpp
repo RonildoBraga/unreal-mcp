@@ -138,6 +138,11 @@ namespace
 				TEXT("delete_actor_batch"),
 				TEXT("get_object_property"),
 				TEXT("set_object_property"),
+				TEXT("frame_actor"),
+				TEXT("set_show_flag"),
+				TEXT("wait_for_async_compile"),
+				TEXT("dismiss_modal_dialog"),
+				TEXT("get_actor_transform"),
 				TEXT("recompile_live"),
 			});
 
@@ -165,6 +170,8 @@ namespace
 
 			RegBatch<FUnrealMCPProjectCommands>({
 				TEXT("create_input_mapping"),
+				TEXT("get_ini"),
+				TEXT("set_ini"),
 			});
 
 			RegBatch<FUnrealMCPAssetCommands>({
@@ -180,6 +187,10 @@ namespace
 				TEXT("migrate_assets"),
 				TEXT("import_asset"),
 				TEXT("finalize_migration"),
+				TEXT("focus_in_browser"),
+				TEXT("navigate_to_folder"),
+				TEXT("open_in_editor"),
+				TEXT("static_mesh_get_info"),
 			});
 
 			RegBatch<FUnrealMCPLevelCommands>({

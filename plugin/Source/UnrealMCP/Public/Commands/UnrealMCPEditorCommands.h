@@ -85,4 +85,15 @@ private:
     // path, /Script/ engine class, or class default object.
     TSharedPtr<FJsonObject> HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — viewport: frame a single actor, toggle show flags.
+    TSharedPtr<FJsonObject> HandleFrameActor(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetShowFlag(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — console-bridge unblockers for migration flow.
+    TSharedPtr<FJsonObject> HandleWaitForAsyncCompile(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleDismissModalDialog(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — read counterpart for actor transform (symmetry with set).
+    TSharedPtr<FJsonObject> HandleGetActorTransform(const TSharedPtr<FJsonObject>& Params);
 };

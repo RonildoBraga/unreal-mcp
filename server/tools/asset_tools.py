@@ -334,4 +334,79 @@ def register_asset_tools(mcp: FastMCP):
             }
         """
 
+    @unreal_tool(mcp)
+    def focus_in_browser(ctx: Context, asset_path: str) -> Dict[str, Any]:
+        """Sync the Content Browser to + highlight an asset (v0.8.0).
+
+        Cooperative-workflow tool: when the agent is about to do something
+        with an asset, point the user at it first so they can verify the
+        target visually before the change lands.
+
+        Args:
+            asset_path: "/Game/.../AssetName" (object path or package path).
+
+        Returns:
+            {"success": true, "asset_path": "...", "asset_class": "..."}
+        """
+
+    @unreal_tool(mcp)
+    def navigate_to_folder(ctx: Context, folder_path: str) -> Dict[str, Any]:
+        """Pivot the Content Browser to a folder (v0.8.0).
+
+        Args:
+            folder_path: Virtual folder path. "/Game/Lauder/Materials" or just
+                         "Lauder/Materials" (a /Game/ prefix is auto-added).
+
+        Returns:
+            {"success": true, "folder_path": "..."}
+        """
+
+    @unreal_tool(mcp)
+    def open_in_editor(ctx: Context, asset_path: str) -> Dict[str, Any]:
+        """Open an asset in its dedicated editor (v0.8.0).
+
+        Opens the right editor for the asset's class — Material Editor for
+        UMaterial, BP Editor for UBlueprint, Static Mesh Editor for UStaticMesh,
+        etc. No-op + clean error response if no editor is registered for
+        the asset's class.
+
+        Args:
+            asset_path: "/Game/.../AssetName".
+
+        Returns:
+            On success: {"success": true, "asset_path": "...", "asset_class": "...", "opened": true}
+            No-editor:  {"success": false, "opened": false, "error": "..."}
+        """
+
+    @unreal_tool(mcp)
+    def static_mesh_get_info(ctx: Context, asset_path: str) -> Dict[str, Any]:
+        """Inspect a UStaticMesh's bounds, material slots, and LOD count (v0.8.0).
+
+        Pre-placement query: before scaling a Megascans mesh and dropping it
+        in the level, find out how big it is (so the scale factor is sane)
+        and which slots are available (so material overrides can be planned).
+
+        Args:
+            asset_path: "/Game/.../MeshName" (object or package path).
+
+        Returns:
+            {
+              "success": true,
+              "asset_path": "...",
+              "bounds": {
+                "center": [X, Y, Z],
+                "extent": [X, Y, Z],     # half-size
+                "size":   [X, Y, Z],     # full size (extent * 2)
+                "min":    [X, Y, Z],
+                "max":    [X, Y, Z]
+              },
+              "material_slots": [
+                {"index": 0, "slot_name": "...", "material": "/Game/.../M_..."},
+                ...
+              ],
+              "slot_count": N,
+              "lod_count": M
+            }
+        """
+
     logger.info("Asset tools registered successfully")

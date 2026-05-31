@@ -1,8 +1,8 @@
 """Editor Tools for Unreal MCP — actors, viewport, screenshots, console, PIE.
 
-Tool surface (43 tools):
+Tool surface (52 tools):
 
-  Actors (15)
+  Actors (18)
     get_actors_in_level             enumerate every actor in the loaded world (deprecated; prefer find_actors)
     find_actors                     paged enumeration with class/name/folder filters (v0.8.0)
     find_actors_by_name             pattern-match against actor display names
@@ -14,9 +14,12 @@ Tool surface (43 tools):
     delete_actor                    remove an actor from the level
     delete_actor_batch              batched delete (v0.8.0)
     set_actor_transform             write location/rotation/scale selectively
+    get_actor_transform             read location/rotation/scale (v0.8.0)
     get_actor_properties            dump every UPROPERTY on an actor
     get_actor_property              read a single dotted-path property
     set_actor_property              write a single dotted-path property
+    get_component_property          read a property on a named component (v0.8.0 thin shim)
+    get_static_mesh_material        read the current material on a SMC slot (v0.8.0 thin shim)
     spawn_blueprint_actor           spawn an actor from a BP class
 
   Generalized object access (4) (v0.8.0)
@@ -31,7 +34,9 @@ Tool surface (43 tools):
     clear_selection                 deselect everything
     focus_selected_actors           frame current selection in the viewport
 
-  Viewport + state (8)
+  Viewport + state (10)
+    frame_actor                     frame a single actor (no need to select first) (v0.8.0)
+    set_show_flag                   toggle Lighting/Sprites/Bounds/etc. show flags (v0.8.0)
     take_screenshot                 PNG of editor viewport (inline Image bytes)
     get_viewport_camera             camera location + rotation
     set_viewport_camera             move camera to a pose
@@ -41,9 +46,11 @@ Tool surface (43 tools):
     set_cvar                        write a UE CVar
     get_cvar                        read a UE CVar
 
-  Editor introspection (3)
+  Editor introspection (5)
     read_output_log                 tail the editor's Output Log
     get_async_compile_status        shader + asset compile queues
+    wait_for_async_compile          block until compile queues empty (v0.8.0)
+    dismiss_modal_dialog            close transient editor popups (v0.8.0)
     recompile_live                  trigger Live Coding rebuild of the plugin DLL
 
   PIE control (7)
@@ -327,6 +334,28 @@ def register_editor_tools(mcp: FastMCP):
         """
 
     @unreal_tool(mcp)
+    def get_actor_transform(ctx: Context, name: str) -> Dict[str, Any]:
+        """Read an actor's transform (v0.8.0 — read counterpart of set_actor_transform).
+
+        Symmetry tool — returns location + rotation + scale as one payload
+        so tight inspection loops don't pay three get_actor_property calls.
+        Two-pass label / internal-name lookup, matches set_selected_actors.
+
+        Args:
+            name: Actor display label or internal name.
+
+        Returns:
+            {
+              "success": true,
+              "name": "<display label>",
+              "internal_name": "<UObject name>",
+              "location": [X, Y, Z],
+              "rotation": [Pitch, Yaw, Roll],
+              "scale":    [X, Y, Z]
+            }
+        """
+
+    @unreal_tool(mcp)
     def get_actor_properties(ctx: Context, name: str) -> Dict[str, Any]:
         """Get all UPROPERTY values on an actor.
 
@@ -375,6 +404,58 @@ def register_editor_tools(mcp: FastMCP):
         Returns:
             {"success": bool, ...}
         """
+
+    @mcp.tool()
+    def get_component_property(
+        ctx: Context, actor: str, component: str, path: str
+    ) -> Dict[str, Any]:
+        """Read a property on a named component of an actor (v0.8.0 thin shim).
+
+        Convenience wrapper over `get_object_property` — composes the dotted
+        path `<component>.<path>` and pins the target to the actor name. Use
+        when the call site is naturally component-rooted (e.g. inspecting a
+        light's Intensity without typing out the StaticMeshComponent prefix).
+
+        Args:
+            actor:     Actor display label or internal name.
+            component: Component name on the actor (e.g. "PointLightComponent").
+            path:      Property path under that component (e.g. "Intensity",
+                       "LightColor", "AttenuationRadius").
+
+        Returns:
+            Same shape as get_object_property.
+        """
+        return dispatch_unreal_command(
+            "get_object_property",
+            {"target": actor, "path": f"{component}.{path}"},
+        )
+
+    @mcp.tool()
+    def get_static_mesh_material(
+        ctx: Context, actor: str, slot_index: int = 0
+    ) -> Dict[str, Any]:
+        """Read the current material on a static mesh component's slot (v0.8.0 thin shim).
+
+        Convenience wrapper over `get_object_property` — uses the
+        OverrideMaterials.{slot} path under the actor's StaticMeshComponent.
+        Returns the asset path of the assigned material, or empty when the
+        slot inherits the mesh's default.
+
+        Args:
+            actor:      Actor display label or internal name.
+            slot_index: Material slot index. Default 0.
+
+        Returns:
+            Same shape as get_object_property, with `value` as the asset
+            path string for the slot.
+        """
+        return dispatch_unreal_command(
+            "get_object_property",
+            {
+                "target": actor,
+                "path": f"StaticMeshComponent.OverrideMaterials.{slot_index}",
+            },
+        )
 
     @unreal_tool(mcp)
     def get_object_property(ctx: Context, target: str, path: str) -> Dict[str, Any]:
@@ -621,6 +702,45 @@ def register_editor_tools(mcp: FastMCP):
         """
 
     @unreal_tool(mcp)
+    def frame_actor(ctx: Context, name: str) -> Dict[str, Any]:
+        """Frame a single actor in the perspective viewports (v0.8.0).
+
+        Equivalent of selecting the actor and pressing F. Faster than the
+        two-call (set_selected_actors → focus_selected_actors) form when you
+        only need to look at one thing. Two-pass label/internal-name lookup.
+
+        Args:
+            name: Actor display label or internal name.
+
+        Returns:
+            {"success": true, "framed": "<display label>"}
+        """
+
+    @unreal_tool(mcp)
+    def set_show_flag(ctx: Context, flag: str, enabled: bool) -> Dict[str, Any]:
+        """Toggle a viewport show flag (v0.8.0).
+
+        Show flags control what's drawn in the editor viewport: Lighting,
+        BillboardSprites (the placeholder icons for lights/cameras/triggers),
+        Bounds, Grid, PostProcessing, etc. Use to clean up screenshots —
+        e.g. set_show_flag("BillboardSprites", False) to hide the yellow
+        icons before a viewport capture.
+
+        Args:
+            flag: Show flag CODE name (not the editor display label).
+                  Many flags differ between the two — e.g. the UI shows
+                  "Sprites" but the code symbol is "BillboardSprites".
+                  Common code names: BillboardSprites, Bounds, Grid,
+                  Lighting, PostProcessing, Game, Atmosphere, Fog,
+                  AmbientCubemap, AntiAliasing, MotionBlur, DepthOfField,
+                  Particles, Wireframe, BSP, StaticMeshes, SkeletalMeshes.
+            enabled: Target state.
+
+        Returns:
+            {"success": true, "flag": "...", "enabled": bool}
+        """
+
+    @unreal_tool(mcp)
     def execute_console_command(ctx: Context, command: str) -> Dict[str, Any]:
         """Execute an arbitrary UE console command against the editor world.
 
@@ -696,6 +816,39 @@ def register_editor_tools(mcp: FastMCP):
 
         Returns:
             {"success": true, "shader_jobs": N, "asset_compiles": M, "is_idle": bool}
+        """
+
+    @unreal_tool(mcp)
+    def wait_for_async_compile(ctx: Context, timeout_seconds: float = 60.0) -> Dict[str, Any]:
+        """Block until shader + asset compiles finish (v0.8.0).
+
+        Drains FAssetCompilingManager + GShaderCompilingManager from the
+        editor side, ticking them in a 100 ms loop until empty or timeout.
+        Use BEFORE `finalize_migration` so the post-migrate fixup doesn't
+        race the mesh compile (the long-standing issue tracked in project
+        memory as task #40).
+
+        Args:
+            timeout_seconds: Max wait. Default 60. Pass larger for slow
+                first imports of high-poly Megascans assets.
+
+        Returns:
+            On success:  {"success": true, "elapsed_seconds": N, "iterations": K}
+            On timeout: {"success": false, "timed_out": true,
+                         "remaining_jobs": M, "elapsed_seconds": N, "error": "..."}
+        """
+
+    @unreal_tool(mcp)
+    def dismiss_modal_dialog(ctx: Context) -> Dict[str, Any]:
+        """Close transient editor popups + modal windows (v0.8.0).
+
+        Best-effort: calls FSlateApplication::DismissAllMenus + iterates the
+        top-level window list and destroys anything `IsModalWindow()`.
+        Useful after migrate_assets / finalize_migration when an "Importing..."
+        progress window lingers and blocks further input.
+
+        Returns:
+            {"success": true, "dismissed_count": N}
         """
 
     @unreal_tool(mcp)
@@ -820,8 +973,8 @@ def register_editor_tools(mcp: FastMCP):
     @mcp.tool()
     def pie_screenshot(
         ctx: Context, filename: str = "pie_screenshot.png"
-    ) -> Any:
-        """Capture a screenshot from the PIE game viewport (v0.7.11).
+    ) -> Union["Image", Dict[str, Any]]:  # type: ignore[name-defined]
+        """Capture a screenshot from the PIE game viewport (v0.7.11, unwrap-fixed v0.8.0).
 
         Different from take_screenshot — that one captures the editor's
         active viewport which when PIE is running may show editor gizmos.
@@ -832,22 +985,43 @@ def register_editor_tools(mcp: FastMCP):
                       <Project>/Saved/Screenshots/. Default "pie_screenshot.png".
 
         Returns:
-            FastMCP Image content (inline PNG bytes) on success,
-            else {"success": False, "error": "..."}.
+            On success: a FastMCP Image content block containing the PNG.
+            On failure: {"success": False, "error": "..."}.
         """
-        # NB: not a `@unreal_tool` — wraps the response into an Image content
-        # block before returning, same pattern as take_screenshot.
+        # NB: not a `@unreal_tool` — needs to read the PNG off disk and wrap
+        # into the FastMCP Image content type before returning. Mirrors the
+        # take_screenshot wrapper exactly except for the field name the C++
+        # side returns: `path` (here) vs. `filepath` (take_screenshot — wire
+        # name predates the rename, kept for compat).
         response = dispatch_unreal_command("pie_screenshot", {"filename": filename})
         if not response.get("success", False):
             return response
 
-        path = response.get("path")
-        if Image is not None and path:
-            try:
-                return Image(path=path)
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"pie_screenshot Image() wrap failed: {e}")
-        return response
+        abs_path = response.get("path")
+        if not abs_path:
+            return {
+                "success": False,
+                "error": "Response missing path",
+                "raw": response,
+            }
+
+        png_path = Path(abs_path)
+        if not png_path.exists():
+            return {
+                "success": False,
+                "error": f"Screenshot saved but file not found at {abs_path}",
+            }
+
+        if Image is None:  # pragma: no cover
+            return {
+                "success": True,
+                "path": str(png_path),
+                "size_bytes": png_path.stat().st_size,
+                "width": response.get("width"),
+                "height": response.get("height"),
+            }
+
+        return Image(path=str(png_path))
 
     @unreal_tool(mcp)
     def get_selected_actors(ctx: Context) -> Dict[str, Any]:

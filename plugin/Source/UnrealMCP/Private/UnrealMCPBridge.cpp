@@ -337,10 +337,21 @@ void UUnrealMCPBridge::StopServer()
 
 // ─── Command execution ────────────────────────────────────────────────────
 //
-// Day 2b — thin dispatch through FMCPRegistry. The handler decides the inner
-// response shape; the bridge wraps it in the legacy {status, result|error}
-// envelope. Day 2c flips that envelope to strict {success, error?} and
-// updates the Python wrappers in the same commit.
+// Day 2c-i — strict {success, error?, ...payload} on the wire (per
+// architecture-v0.8-plan §3.7 and §8 question 1). The legacy
+// {status, result|error} envelope is gone; handler's inner shape IS the
+// wire shape, with two small normalizations:
+//
+//   1. If the handler omitted `success`, treat as implicit success.
+//   2. If the handler used the legacy CreateSuccessResponse pattern
+//      (which builds `{success: true, data: {...}}`), flatten the
+//      `data` fields into the top level so the wire shape stays
+//      consistent regardless of which helper the handler used.
+//
+// This lets all 294 existing CreateSuccessResponse / CreateErrorResponse
+// call sites keep their bodies unchanged; Day 2c-ii migrates the Python
+// wrappers; Day 2c-iii drops `data`-flattening once handlers have stopped
+// using the legacy nested form.
 
 FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
@@ -351,42 +362,42 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
 
 	AsyncTask(ENamedThreads::GameThread, [CommandType, Params, Promise = MoveTemp(Promise)]() mutable
 	{
-		TSharedPtr<FJsonObject> ResponseJson = MakeShared<FJsonObject>();
+		TSharedPtr<FJsonObject> ResponseJson;
 
 		try
 		{
-			TSharedPtr<FJsonObject> ResultJson = FMCPRegistry::Get().Dispatch(CommandType, Params);
-
-			// Inspect the handler's response. Handlers either return
-			// {success:true|false, error?, ...} (the new shape, used by
-			// FMCPResponse) or a bare object that's implicitly success.
-			bool bSuccess = true;
-			FString ErrorMessage;
-
-			if (ResultJson.IsValid() && ResultJson->HasField(TEXT("success")))
+			ResponseJson = FMCPRegistry::Get().Dispatch(CommandType, Params);
+			if (!ResponseJson.IsValid())
 			{
-				bSuccess = ResultJson->GetBoolField(TEXT("success"));
-				if (!bSuccess && ResultJson->HasField(TEXT("error")))
+				ResponseJson = FMCPResponse::Error(TEXT("Empty response from handler"));
+			}
+
+			// Normalize 1: ensure `success` field exists.
+			if (!ResponseJson->HasField(TEXT("success")))
+			{
+				ResponseJson->SetBoolField(TEXT("success"), true);
+			}
+
+			// Normalize 2: flatten legacy `{success: true, data: {...}}`
+			// shape so payload keys live at the top level.
+			const TSharedPtr<FJsonObject>* DataPtr = nullptr;
+			if (ResponseJson->GetBoolField(TEXT("success"))
+			    && ResponseJson->TryGetObjectField(TEXT("data"), DataPtr)
+			    && DataPtr && DataPtr->IsValid())
+			{
+				for (const auto& Pair : (*DataPtr)->Values)
 				{
-					ErrorMessage = ResultJson->GetStringField(TEXT("error"));
+					if (Pair.Key != TEXT("success"))
+					{
+						ResponseJson->SetField(Pair.Key, Pair.Value);
+					}
 				}
-			}
-
-			if (bSuccess)
-			{
-				ResponseJson->SetStringField(TEXT("status"), TEXT("success"));
-				ResponseJson->SetObjectField(TEXT("result"), ResultJson);
-			}
-			else
-			{
-				ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-				ResponseJson->SetStringField(TEXT("error"), ErrorMessage);
+				ResponseJson->RemoveField(TEXT("data"));
 			}
 		}
 		catch (const std::exception& e)
 		{
-			ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-			ResponseJson->SetStringField(TEXT("error"), UTF8_TO_TCHAR(e.what()));
+			ResponseJson = FMCPResponse::Error(UTF8_TO_TCHAR(e.what()));
 		}
 
 		FString ResultString;

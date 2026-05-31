@@ -1,5 +1,9 @@
 #include "UnrealMCPBridge.h"
+
 #include "MCPServerRunnable.h"
+#include "MCPRegistry.h"
+#include "MCPResponse.h"
+
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 #include "HAL/RunnableThread.h"
@@ -10,52 +14,14 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
-#include "Engine/StaticMeshActor.h"
-#include "Engine/DirectionalLight.h"
-#include "Engine/PointLight.h"
-#include "Engine/SpotLight.h"
-#include "Camera/CameraActor.h"
-#include "EditorAssetLibrary.h"
-#include "AssetRegistry/AssetRegistryModule.h"
-#include "JsonObjectConverter.h"
-#include "GameFramework/Actor.h"
-#include "Engine/Selection.h"
-#include "Kismet/GameplayStatics.h"
 #include "Async/Async.h"
-// Add Blueprint related includes
-#include "Engine/Blueprint.h"
-#include "Engine/BlueprintGeneratedClass.h"
-#include "Factories/BlueprintFactory.h"
-#include "EdGraphSchema_K2.h"
-#include "K2Node_Event.h"
-#include "K2Node_VariableGet.h"
-#include "K2Node_VariableSet.h"
-#include "Components/StaticMeshComponent.h"
-#include "Components/BoxComponent.h"
-#include "Components/SphereComponent.h"
-#include "Kismet2/BlueprintEditorUtils.h"
-#include "Kismet2/KismetEditorUtilities.h"
-// UE5.5 correct includes
-#include "Engine/SimpleConstructionScript.h"
-#include "Engine/SCS_Node.h"
-#include "UObject/Field.h"
-#include "UObject/FieldPath.h"
-// Blueprint Graph specific includes
-#include "EdGraph/EdGraph.h"
-#include "EdGraph/EdGraphNode.h"
-#include "EdGraph/EdGraphPin.h"
-#include "K2Node_CallFunction.h"
-#include "K2Node_InputAction.h"
-#include "K2Node_Self.h"
-#include "GameFramework/InputSettings.h"
-#include "EditorSubsystem.h"
-#include "Subsystems/EditorActorSubsystem.h"
-// Include our new command handler classes
+
+// Command handler classes — kept until Day 2d migrates handlers into the
+// new Assets/, World/, Editor/, Project/ folder layout.
 #include "Commands/UnrealMCPEditorCommands.h"
 #include "Commands/UnrealMCPBlueprintCommands.h"
 #include "Commands/UnrealMCPBlueprintNodeCommands.h"
 #include "Commands/UnrealMCPProjectCommands.h"
-#include "Commands/UnrealMCPCommonUtils.h"
 #include "Commands/UnrealMCPUMGCommands.h"
 #include "Commands/UnrealMCPAssetCommands.h"
 #include "Commands/UnrealMCPLevelCommands.h"
@@ -66,349 +32,368 @@
 #define MCP_SERVER_HOST "127.0.0.1"
 #define MCP_SERVER_PORT 55557
 
+// ─── Construction ─────────────────────────────────────────────────────────
+
 UUnrealMCPBridge::UUnrealMCPBridge()
 {
-    EditorCommands = MakeShared<FUnrealMCPEditorCommands>();
-    BlueprintCommands = MakeShared<FUnrealMCPBlueprintCommands>();
-    BlueprintNodeCommands = MakeShared<FUnrealMCPBlueprintNodeCommands>();
-    ProjectCommands = MakeShared<FUnrealMCPProjectCommands>();
-    UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
-    AssetCommands = MakeShared<FUnrealMCPAssetCommands>();
-    LevelCommands = MakeShared<FUnrealMCPLevelCommands>();
-    MaterialCommands = MakeShared<FUnrealMCPMaterialCommands>();
-    OutlinerCommands = MakeShared<FUnrealMCPOutlinerCommands>();
+	EditorCommands       = MakeShared<FUnrealMCPEditorCommands>();
+	BlueprintCommands    = MakeShared<FUnrealMCPBlueprintCommands>();
+	BlueprintNodeCommands = MakeShared<FUnrealMCPBlueprintNodeCommands>();
+	ProjectCommands      = MakeShared<FUnrealMCPProjectCommands>();
+	UMGCommands          = MakeShared<FUnrealMCPUMGCommands>();
+	AssetCommands        = MakeShared<FUnrealMCPAssetCommands>();
+	LevelCommands        = MakeShared<FUnrealMCPLevelCommands>();
+	MaterialCommands     = MakeShared<FUnrealMCPMaterialCommands>();
+	OutlinerCommands     = MakeShared<FUnrealMCPOutlinerCommands>();
 }
 
 UUnrealMCPBridge::~UUnrealMCPBridge()
 {
-    EditorCommands.Reset();
-    BlueprintCommands.Reset();
-    BlueprintNodeCommands.Reset();
-    ProjectCommands.Reset();
-    UMGCommands.Reset();
-    AssetCommands.Reset();
-    LevelCommands.Reset();
-    MaterialCommands.Reset();
-    OutlinerCommands.Reset();
+	EditorCommands.Reset();
+	BlueprintCommands.Reset();
+	BlueprintNodeCommands.Reset();
+	ProjectCommands.Reset();
+	UMGCommands.Reset();
+	AssetCommands.Reset();
+	LevelCommands.Reset();
+	MaterialCommands.Reset();
+	OutlinerCommands.Reset();
 }
 
-// Initialize subsystem
+// ─── Subsystem lifecycle ──────────────────────────────────────────────────
+
+namespace
+{
+	/**
+	 * Register a batch of command names that all dispatch through the same
+	 * stateless command-class instance. Each handler lambda captures a
+	 * weak-style copy of the shared pointer and the command name, and
+	 * forwards to the old per-class HandleCommand dispatch.
+	 *
+	 * Day 2d will inline each HandleXxx into its own free function under
+	 * the new folder layout and replace this loop with direct
+	 * REGISTER_MCP_COMMAND calls at file scope.
+	 */
+	template<typename TCommandClass>
+	void RegisterBatch(const TSharedPtr<TCommandClass>& Owner,
+	                   std::initializer_list<const TCHAR*> Names)
+	{
+		FMCPRegistry& R = FMCPRegistry::Get();
+		for (const TCHAR* RawName : Names)
+		{
+			const FString CommandName(RawName);
+			TSharedPtr<TCommandClass> Captured = Owner;
+			R.Register(CommandName, [Captured, CommandName](const TSharedPtr<FJsonObject>& Params)
+			{
+				return Captured->HandleCommand(CommandName, Params);
+			});
+		}
+	}
+}
+
 void UUnrealMCPBridge::Initialize(FSubsystemCollectionBase& Collection)
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Initializing"));
-    
-    bIsRunning = false;
-    ListenerSocket = nullptr;
-    ConnectionSocket = nullptr;
-    ServerThread = nullptr;
-    Port = MCP_SERVER_PORT;
-    FIPv4Address::Parse(MCP_SERVER_HOST, ServerAddress);
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Initializing"));
 
-    // Start the server automatically
-    StartServer();
+	bIsRunning = false;
+	ListenerSocket = nullptr;
+	ConnectionSocket = nullptr;
+	ServerThread = nullptr;
+	Port = MCP_SERVER_PORT;
+	FIPv4Address::Parse(MCP_SERVER_HOST, ServerAddress);
+
+	// ─── Command registration (Day 2b) ───────────────────────────────
+	//
+	// All 78 existing commands re-routed through FMCPRegistry. No behavioral
+	// change vs the prior if/else chain — same handlers, same response
+	// shapes. Day 2c will flip the wire format; Day 2d will migrate the
+	// handlers themselves into the new folder layout.
+
+	FMCPRegistry& Registry = FMCPRegistry::Get();
+
+	// Bridge-level virtual command.
+	Registry.Register(TEXT("ping"), [](const TSharedPtr<FJsonObject>& /*Params*/)
+	{
+		TSharedPtr<FJsonObject> Out = MakeShared<FJsonObject>();
+		Out->SetStringField(TEXT("message"), TEXT("pong"));
+		return Out;
+	});
+
+	// Editor — actors, viewport, screenshots, console, PIE, selection.
+	RegisterBatch(EditorCommands, {
+		TEXT("get_actors_in_level"),
+		TEXT("find_actors_by_name"),
+		TEXT("spawn_actor"),
+		TEXT("create_actor"),
+		TEXT("spawn_static_mesh_actor"),
+		TEXT("set_static_mesh_actor_mesh"),
+		TEXT("set_static_mesh_material"),
+		TEXT("delete_actor"),
+		TEXT("set_actor_transform"),
+		TEXT("get_actor_properties"),
+		TEXT("get_actor_property"),
+		TEXT("set_actor_property"),
+		TEXT("spawn_blueprint_actor"),
+		TEXT("focus_viewport"),
+		TEXT("take_screenshot"),
+		TEXT("get_viewport_camera"),
+		TEXT("set_viewport_camera"),
+		TEXT("execute_console_command"),
+		TEXT("set_cvar"),
+		TEXT("get_cvar"),
+		TEXT("get_viewport_mode"),
+		TEXT("set_viewport_mode"),
+		TEXT("read_output_log"),
+		TEXT("get_async_compile_status"),
+		TEXT("start_pie"),
+		TEXT("stop_pie"),
+		TEXT("is_pie_active"),
+		TEXT("pie_get_player"),
+		TEXT("pie_set_player"),
+		TEXT("pie_apply_movement"),
+		TEXT("pie_screenshot"),
+		TEXT("get_selected_actors"),
+	});
+
+	RegisterBatch(BlueprintCommands, {
+		TEXT("create_blueprint"),
+		TEXT("add_component_to_blueprint"),
+		TEXT("set_component_property"),
+		TEXT("set_physics_properties"),
+		TEXT("compile_blueprint"),
+		TEXT("set_blueprint_property"),
+		TEXT("set_static_mesh_properties"),
+		TEXT("set_pawn_properties"),
+	});
+
+	RegisterBatch(BlueprintNodeCommands, {
+		TEXT("connect_blueprint_nodes"),
+		TEXT("add_blueprint_get_self_component_reference"),
+		TEXT("add_blueprint_self_reference"),
+		TEXT("find_blueprint_nodes"),
+		TEXT("add_blueprint_event_node"),
+		TEXT("add_blueprint_input_action_node"),
+		TEXT("add_blueprint_function_node"),
+		TEXT("add_blueprint_variable"),
+	});
+
+	RegisterBatch(ProjectCommands, {
+		TEXT("create_input_mapping"),
+	});
+
+	RegisterBatch(AssetCommands, {
+		TEXT("list_assets"),
+		TEXT("get_asset_info"),
+		TEXT("find_assets_by_class"),
+		TEXT("get_asset_dependencies"),
+		TEXT("get_asset_references"),
+		TEXT("move_asset"),
+		TEXT("delete_asset"),
+		TEXT("rename_asset"),
+		TEXT("duplicate_asset"),
+		TEXT("migrate_assets"),
+		TEXT("import_asset"),
+		TEXT("finalize_migration"),
+	});
+
+	RegisterBatch(LevelCommands, {
+		TEXT("get_current_level"),
+		TEXT("open_level"),
+		TEXT("save_current_level"),
+		TEXT("save_all_dirty"),
+	});
+
+	RegisterBatch(MaterialCommands, {
+		TEXT("get_material_parameters"),
+		TEXT("set_material_instance_param"),
+		TEXT("create_material_instance"),
+		TEXT("get_material_uses"),
+		TEXT("list_material_instances_of_parent"),
+	});
+
+	RegisterBatch(OutlinerCommands, {
+		TEXT("get_outliner_folders"),
+		TEXT("move_actor_to_folder"),
+		TEXT("create_outliner_folder"),
+		TEXT("get_actors_in_folder"),
+	});
+
+	RegisterBatch(UMGCommands, {
+		TEXT("create_umg_widget_blueprint"),
+		TEXT("add_text_block_to_widget"),
+		TEXT("add_button_to_widget"),
+		TEXT("bind_widget_event"),
+		TEXT("set_text_block_binding"),
+		TEXT("add_widget_to_viewport"),
+		// v2 widget tree commands
+		TEXT("add_widget_to_tree"),
+		TEXT("set_widget_text"),
+		TEXT("set_progress_bar_percent"),
+		TEXT("set_progress_bar_fill_color"),
+		TEXT("set_horizontal_box_slot_fill"),
+		TEXT("set_canvas_slot_anchor"),
+		TEXT("delete_widget_from_tree"),
+		TEXT("compile_widget_blueprint"),
+	});
+
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: %d commands registered"), Registry.Num());
+
+	StartServer();
 }
 
-// Clean up resources when subsystem is destroyed
 void UUnrealMCPBridge::Deinitialize()
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Shutting down"));
-    StopServer();
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Shutting down"));
+	StopServer();
 }
 
-// Start the MCP server
+// ─── Server lifecycle (unchanged) ─────────────────────────────────────────
+
 void UUnrealMCPBridge::StartServer()
 {
-    if (bIsRunning)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("UnrealMCPBridge: Server is already running"));
-        return;
-    }
+	if (bIsRunning)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealMCPBridge: Server is already running"));
+		return;
+	}
 
-    // Create socket subsystem
-    ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-    if (!SocketSubsystem)
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to get socket subsystem"));
-        return;
-    }
+	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	if (!SocketSubsystem)
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to get socket subsystem"));
+		return;
+	}
 
-    // Create listener socket
-    TSharedPtr<FSocket> NewListenerSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("UnrealMCPListener"), false));
-    if (!NewListenerSocket.IsValid())
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create listener socket"));
-        return;
-    }
+	TSharedPtr<FSocket> NewListenerSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("UnrealMCPListener"), false));
+	if (!NewListenerSocket.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create listener socket"));
+		return;
+	}
 
-    // Allow address reuse for quick restarts
-    NewListenerSocket->SetReuseAddr(true);
-    NewListenerSocket->SetNonBlocking(true);
+	NewListenerSocket->SetReuseAddr(true);
+	NewListenerSocket->SetNonBlocking(true);
 
-    // Bind to address
-    FIPv4Endpoint Endpoint(ServerAddress, Port);
-    if (!NewListenerSocket->Bind(*Endpoint.ToInternetAddr()))
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to bind listener socket to %s:%d"), *ServerAddress.ToString(), Port);
-        return;
-    }
+	FIPv4Endpoint Endpoint(ServerAddress, Port);
+	if (!NewListenerSocket->Bind(*Endpoint.ToInternetAddr()))
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to bind listener socket to %s:%d"),
+		       *ServerAddress.ToString(), Port);
+		return;
+	}
 
-    // Start listening
-    if (!NewListenerSocket->Listen(5))
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to start listening"));
-        return;
-    }
+	if (!NewListenerSocket->Listen(5))
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to start listening"));
+		return;
+	}
 
-    ListenerSocket = NewListenerSocket;
-    bIsRunning = true;
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server started on %s:%d"), *ServerAddress.ToString(), Port);
+	ListenerSocket = NewListenerSocket;
+	bIsRunning = true;
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server started on %s:%d"),
+	       *ServerAddress.ToString(), Port);
 
-    // Start server thread
-    ServerThread = FRunnableThread::Create(
-        new FMCPServerRunnable(this, ListenerSocket),
-        TEXT("UnrealMCPServerThread"),
-        0, TPri_Normal
-    );
+	ServerThread = FRunnableThread::Create(
+		new FMCPServerRunnable(this, ListenerSocket),
+		TEXT("UnrealMCPServerThread"),
+		0, TPri_Normal
+	);
 
-    if (!ServerThread)
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create server thread"));
-        StopServer();
-        return;
-    }
+	if (!ServerThread)
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create server thread"));
+		StopServer();
+		return;
+	}
 }
 
-// Stop the MCP server
 void UUnrealMCPBridge::StopServer()
 {
-    if (!bIsRunning)
-    {
-        return;
-    }
+	if (!bIsRunning) return;
 
-    bIsRunning = false;
+	bIsRunning = false;
 
-    // Clean up thread
-    if (ServerThread)
-    {
-        ServerThread->Kill(true);
-        delete ServerThread;
-        ServerThread = nullptr;
-    }
+	if (ServerThread)
+	{
+		ServerThread->Kill(true);
+		delete ServerThread;
+		ServerThread = nullptr;
+	}
 
-    // Close sockets
-    if (ConnectionSocket.IsValid())
-    {
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(ConnectionSocket.Get());
-        ConnectionSocket.Reset();
-    }
+	if (ConnectionSocket.IsValid())
+	{
+		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(ConnectionSocket.Get());
+		ConnectionSocket.Reset();
+	}
 
-    if (ListenerSocket.IsValid())
-    {
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(ListenerSocket.Get());
-        ListenerSocket.Reset();
-    }
+	if (ListenerSocket.IsValid())
+	{
+		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(ListenerSocket.Get());
+		ListenerSocket.Reset();
+	}
 
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server stopped"));
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server stopped"));
 }
 
-// Execute a command received from a client
+// ─── Command execution ────────────────────────────────────────────────────
+//
+// Day 2b — thin dispatch through FMCPRegistry. The handler decides the inner
+// response shape; the bridge wraps it in the legacy {status, result|error}
+// envelope. Day 2c flips that envelope to strict {success, error?} and
+// updates the Python wrappers in the same commit.
+
 FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Executing command: %s"), *CommandType);
-    
-    // Create a promise to wait for the result
-    TPromise<FString> Promise;
-    TFuture<FString> Future = Promise.GetFuture();
-    
-    // Queue execution on Game Thread
-    AsyncTask(ENamedThreads::GameThread, [this, CommandType, Params, Promise = MoveTemp(Promise)]() mutable
-    {
-        TSharedPtr<FJsonObject> ResponseJson = MakeShareable(new FJsonObject);
-        
-        try
-        {
-            TSharedPtr<FJsonObject> ResultJson;
-            
-            if (CommandType == TEXT("ping"))
-            {
-                ResultJson = MakeShareable(new FJsonObject);
-                ResultJson->SetStringField(TEXT("message"), TEXT("pong"));
-            }
-            // Editor Commands (including actor manipulation + Sprint 1 state ext.)
-            else if (CommandType == TEXT("get_actors_in_level") ||
-                     CommandType == TEXT("find_actors_by_name") ||
-                     CommandType == TEXT("spawn_actor") ||
-                     CommandType == TEXT("create_actor") ||
-                     CommandType == TEXT("spawn_static_mesh_actor") ||
-                     CommandType == TEXT("set_static_mesh_actor_mesh") ||
-                     CommandType == TEXT("set_static_mesh_material") ||
-                     CommandType == TEXT("delete_actor") ||
-                     CommandType == TEXT("set_actor_transform") ||
-                     CommandType == TEXT("get_actor_properties") ||
-                     CommandType == TEXT("get_actor_property") ||
-                     CommandType == TEXT("set_actor_property") ||
-                     CommandType == TEXT("spawn_blueprint_actor") ||
-                     CommandType == TEXT("focus_viewport") ||
-                     CommandType == TEXT("take_screenshot") ||
-                     CommandType == TEXT("get_viewport_camera") ||
-                     CommandType == TEXT("set_viewport_camera") ||
-                     CommandType == TEXT("execute_console_command") ||
-                     CommandType == TEXT("set_cvar") ||
-                     CommandType == TEXT("get_cvar") ||
-                     CommandType == TEXT("get_viewport_mode") ||
-                     CommandType == TEXT("set_viewport_mode") ||
-                     CommandType == TEXT("read_output_log") ||
-                     CommandType == TEXT("get_async_compile_status") ||
-                     CommandType == TEXT("start_pie") ||
-                     CommandType == TEXT("stop_pie") ||
-                     CommandType == TEXT("is_pie_active") ||
-                     CommandType == TEXT("pie_get_player") ||
-                     CommandType == TEXT("pie_set_player") ||
-                     CommandType == TEXT("pie_apply_movement") ||
-                     CommandType == TEXT("pie_screenshot") ||
-                     CommandType == TEXT("get_selected_actors"))
-            {
-                ResultJson = EditorCommands->HandleCommand(CommandType, Params);
-            }
-            // Blueprint Commands
-            else if (CommandType == TEXT("create_blueprint") || 
-                     CommandType == TEXT("add_component_to_blueprint") || 
-                     CommandType == TEXT("set_component_property") || 
-                     CommandType == TEXT("set_physics_properties") || 
-                     CommandType == TEXT("compile_blueprint") || 
-                     CommandType == TEXT("set_blueprint_property") || 
-                     CommandType == TEXT("set_static_mesh_properties") ||
-                     CommandType == TEXT("set_pawn_properties"))
-            {
-                ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
-            }
-            // Blueprint Node Commands
-            else if (CommandType == TEXT("connect_blueprint_nodes") || 
-                     CommandType == TEXT("add_blueprint_get_self_component_reference") ||
-                     CommandType == TEXT("add_blueprint_self_reference") ||
-                     CommandType == TEXT("find_blueprint_nodes") ||
-                     CommandType == TEXT("add_blueprint_event_node") ||
-                     CommandType == TEXT("add_blueprint_input_action_node") ||
-                     CommandType == TEXT("add_blueprint_function_node") ||
-                     CommandType == TEXT("add_blueprint_variable"))
-            {
-                ResultJson = BlueprintNodeCommands->HandleCommand(CommandType, Params);
-            }
-            // Project Commands
-            else if (CommandType == TEXT("create_input_mapping"))
-            {
-                ResultJson = ProjectCommands->HandleCommand(CommandType, Params);
-            }
-            // Asset Commands (Sprint 1 — asset registry queries + asset mutations)
-            else if (CommandType == TEXT("list_assets") ||
-                     CommandType == TEXT("get_asset_info") ||
-                     CommandType == TEXT("find_assets_by_class") ||
-                     CommandType == TEXT("get_asset_dependencies") ||
-                     CommandType == TEXT("get_asset_references") ||
-                     CommandType == TEXT("move_asset") ||
-                     CommandType == TEXT("delete_asset") ||
-                     CommandType == TEXT("rename_asset") ||
-                     CommandType == TEXT("duplicate_asset") ||
-                     CommandType == TEXT("migrate_assets") ||
-                     CommandType == TEXT("import_asset") ||
-                     CommandType == TEXT("finalize_migration"))
-            {
-                ResultJson = AssetCommands->HandleCommand(CommandType, Params);
-            }
-            // Level Commands (Sprint 1 partial — basic level lifecycle)
-            else if (CommandType == TEXT("get_current_level") ||
-                     CommandType == TEXT("open_level") ||
-                     CommandType == TEXT("save_current_level") ||
-                     CommandType == TEXT("save_all_dirty"))
-            {
-                ResultJson = LevelCommands->HandleCommand(CommandType, Params);
-            }
-            // Material Commands (Sprint 2 — material parameters, instance create + tune)
-            else if (CommandType == TEXT("get_material_parameters") ||
-                     CommandType == TEXT("set_material_instance_param") ||
-                     CommandType == TEXT("create_material_instance") ||
-                     CommandType == TEXT("get_material_uses") ||
-                     CommandType == TEXT("list_material_instances_of_parent"))
-            {
-                ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
-            }
-            // Outliner Commands (Sprint 2 — actor folder organization)
-            else if (CommandType == TEXT("get_outliner_folders") ||
-                     CommandType == TEXT("move_actor_to_folder") ||
-                     CommandType == TEXT("create_outliner_folder") ||
-                     CommandType == TEXT("get_actors_in_folder"))
-            {
-                ResultJson = OutlinerCommands->HandleCommand(CommandType, Params);
-            }
-            // UMG Commands
-            else if (CommandType == TEXT("create_umg_widget_blueprint") ||
-                     CommandType == TEXT("add_text_block_to_widget") ||
-                     CommandType == TEXT("add_button_to_widget") ||
-                     CommandType == TEXT("bind_widget_event") ||
-                     CommandType == TEXT("set_text_block_binding") ||
-                     CommandType == TEXT("add_widget_to_viewport") ||
-                     // v2 commands: path-flexible, parent-aware, with property setters
-                     CommandType == TEXT("add_widget_to_tree") ||
-                     CommandType == TEXT("set_widget_text") ||
-                     CommandType == TEXT("set_progress_bar_percent") ||
-                     CommandType == TEXT("set_progress_bar_fill_color") ||
-                     CommandType == TEXT("set_horizontal_box_slot_fill") ||
-                     CommandType == TEXT("set_canvas_slot_anchor") ||
-                     CommandType == TEXT("delete_widget_from_tree") ||
-                     CommandType == TEXT("compile_widget_blueprint"))
-            {
-                ResultJson = UMGCommands->HandleCommand(CommandType, Params);
-            }
-            else
-            {
-                ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-                ResponseJson->SetStringField(TEXT("error"), FString::Printf(TEXT("Unknown command: %s"), *CommandType));
-                
-                FString ResultString;
-                TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
-                FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-                Promise.SetValue(ResultString);
-                return;
-            }
-            
-            // Check if the result contains an error
-            bool bSuccess = true;
-            FString ErrorMessage;
-            
-            if (ResultJson->HasField(TEXT("success")))
-            {
-                bSuccess = ResultJson->GetBoolField(TEXT("success"));
-                if (!bSuccess && ResultJson->HasField(TEXT("error")))
-                {
-                    ErrorMessage = ResultJson->GetStringField(TEXT("error"));
-                }
-            }
-            
-            if (bSuccess)
-            {
-                // Set success status and include the result
-                ResponseJson->SetStringField(TEXT("status"), TEXT("success"));
-                ResponseJson->SetObjectField(TEXT("result"), ResultJson);
-            }
-            else
-            {
-                // Set error status and include the error message
-                ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-                ResponseJson->SetStringField(TEXT("error"), ErrorMessage);
-            }
-        }
-        catch (const std::exception& e)
-        {
-            ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-            ResponseJson->SetStringField(TEXT("error"), UTF8_TO_TCHAR(e.what()));
-        }
-        
-        FString ResultString;
-        TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
-        FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-        Promise.SetValue(ResultString);
-    });
-    
-    return Future.Get();
+	UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Executing command: %s"), *CommandType);
+
+	TPromise<FString> Promise;
+	TFuture<FString> Future = Promise.GetFuture();
+
+	AsyncTask(ENamedThreads::GameThread, [CommandType, Params, Promise = MoveTemp(Promise)]() mutable
+	{
+		TSharedPtr<FJsonObject> ResponseJson = MakeShared<FJsonObject>();
+
+		try
+		{
+			TSharedPtr<FJsonObject> ResultJson = FMCPRegistry::Get().Dispatch(CommandType, Params);
+
+			// Inspect the handler's response. Handlers either return
+			// {success:true|false, error?, ...} (the new shape, used by
+			// FMCPResponse) or a bare object that's implicitly success.
+			bool bSuccess = true;
+			FString ErrorMessage;
+
+			if (ResultJson.IsValid() && ResultJson->HasField(TEXT("success")))
+			{
+				bSuccess = ResultJson->GetBoolField(TEXT("success"));
+				if (!bSuccess && ResultJson->HasField(TEXT("error")))
+				{
+					ErrorMessage = ResultJson->GetStringField(TEXT("error"));
+				}
+			}
+
+			if (bSuccess)
+			{
+				ResponseJson->SetStringField(TEXT("status"), TEXT("success"));
+				ResponseJson->SetObjectField(TEXT("result"), ResultJson);
+			}
+			else
+			{
+				ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
+				ResponseJson->SetStringField(TEXT("error"), ErrorMessage);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
+			ResponseJson->SetStringField(TEXT("error"), UTF8_TO_TCHAR(e.what()));
+		}
+
+		FString ResultString;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
+		FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
+		Promise.SetValue(ResultString);
+	});
+
+	return Future.Get();
 }

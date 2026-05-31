@@ -1,5 +1,10 @@
-#include "Commands/UnrealMCPLevelCommands.h"
+// v0.8.x §6.2 completion -- level command handlers, lifted out of the
+// v0.7-era FUnrealMCPLevelCommands class. Free functions in anonymous
+// namespace + REGISTER_MCP_COMMAND self-registration at definition site.
+
 #include "Commands/UnrealMCPCommonUtils.h"
+#include "MCPRegistry.h"
+
 #include "Editor.h"
 #include "LevelEditorSubsystem.h"
 #include "Engine/World.h"
@@ -7,31 +12,15 @@
 
 namespace
 {
-    /** Resolve the level editor subsystem. Returns nullptr if not available. */
-    ULevelEditorSubsystem* LevelSub()
-    {
-        return GEditor ? GEditor->GetEditorSubsystem<ULevelEditorSubsystem>() : nullptr;
-    }
-}
 
-
-FUnrealMCPLevelCommands::FUnrealMCPLevelCommands()
+/** Resolve the level editor subsystem. Returns nullptr if not available. */
+ULevelEditorSubsystem* LevelSub()
 {
+    return GEditor ? GEditor->GetEditorSubsystem<ULevelEditorSubsystem>() : nullptr;
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    if (CommandType == TEXT("get_current_level"))   return HandleGetCurrentLevel(Params);
-    if (CommandType == TEXT("open_level"))          return HandleOpenLevel(Params);
-    if (CommandType == TEXT("save_current_level"))  return HandleSaveCurrentLevel(Params);
-
-    return FUnrealMCPCommonUtils::CreateErrorResponse(
-        FString::Printf(TEXT("Unknown level command: %s"), *CommandType));
-}
-
-
-TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleGetCurrentLevel(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetCurrentLevel(const TSharedPtr<FJsonObject>& Params)
 {
     UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
     if (!World)
@@ -50,11 +39,12 @@ TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleGetCurrentLevel(const TSh
         Result->SetStringField(TEXT("object_path"), FString::Printf(TEXT("%s.%s"), *PackageName, *World->GetName()));
     }
     Result->SetStringField(TEXT("map_name"), World->GetMapName());
+    Result->SetBoolField(TEXT("success"), true);
     return Result;
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleOpenLevel(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleOpenLevel(const TSharedPtr<FJsonObject>& Params)
 {
     FString LevelPath;
     if (!Params->TryGetStringField(TEXT("level_path"), LevelPath) || LevelPath.IsEmpty())
@@ -91,7 +81,7 @@ TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleOpenLevel(const TSharedPt
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleSaveCurrentLevel(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSaveCurrentLevel(const TSharedPtr<FJsonObject>& Params)
 {
     ULevelEditorSubsystem* Sub = LevelSub();
     if (!Sub)
@@ -106,4 +96,9 @@ TSharedPtr<FJsonObject> FUnrealMCPLevelCommands::HandleSaveCurrentLevel(const TS
     return Result;
 }
 
+}  // anonymous namespace
 
+
+REGISTER_MCP_COMMAND("get_current_level",   &HandleGetCurrentLevel);
+REGISTER_MCP_COMMAND("open_level",          &HandleOpenLevel);
+REGISTER_MCP_COMMAND("save_current_level",  &HandleSaveCurrentLevel);

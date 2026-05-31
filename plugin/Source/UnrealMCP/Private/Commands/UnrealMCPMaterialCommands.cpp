@@ -1,5 +1,9 @@
-#include "Commands/UnrealMCPMaterialCommands.h"
+// v0.8.x §6.2 completion -- material command handlers, lifted out of the
+// v0.7-era FUnrealMCPMaterialCommands class.
+
 #include "Commands/UnrealMCPCommonUtils.h"
+#include "MCPRegistry.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "EditorAssetLibrary.h"
@@ -17,49 +21,29 @@
 
 namespace
 {
-    /** Load a material or material instance from a /Game/ object path. Returns nullptr on failure. */
-    UMaterialInterface* LoadMaterialInterface(const FString& AssetPath)
-    {
-        return Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(AssetPath));
-    }
 
-    /** Load specifically a material instance (rejects base materials). */
-    UMaterialInstanceConstant* LoadMaterialInstanceConstant(const FString& AssetPath)
-    {
-        return Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(AssetPath));
-    }
-
-    // Renamed from GetRegistry() to avoid an ODR collision in adaptive non-unity
-    // builds — AssetCommands.cpp has its own GetRegistry() in an anonymous
-    // namespace, which becomes a duplicate when both files land in the same
-    // unity TU. Material-specific name keeps the intent obvious at call sites.
-    IAssetRegistry* GetAssetRegistryForMaterials()
-    {
-        FAssetRegistryModule& Module = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-        return &Module.Get();
-    }
-}
-
-
-FUnrealMCPMaterialCommands::FUnrealMCPMaterialCommands()
+/** Load a material or material instance from a /Game/ object path. */
+UMaterialInterface* LoadMaterialInterface(const FString& AssetPath)
 {
+    return Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(AssetPath));
 }
 
-
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
+/** Load specifically a material instance (rejects base materials). */
+UMaterialInstanceConstant* LoadMaterialInstanceConstant(const FString& AssetPath)
 {
-    if (CommandType == TEXT("get_material_parameters"))           return HandleGetMaterialParameters(Params);
-    if (CommandType == TEXT("set_material_instance_param"))        return HandleSetMaterialInstanceParam(Params);
-    if (CommandType == TEXT("create_material_instance"))           return HandleCreateMaterialInstance(Params);
-    if (CommandType == TEXT("get_material_uses"))                  return HandleGetMaterialUses(Params);
-    if (CommandType == TEXT("list_material_instances_of_parent"))  return HandleListMaterialInstancesOfParent(Params);
+    return Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(AssetPath));
+}
 
-    return FUnrealMCPCommonUtils::CreateErrorResponse(
-        FString::Printf(TEXT("Unknown material command: %s"), *CommandType));
+// Material-prefixed name to avoid an ODR collision in non-unity builds
+// (AssetCommands.cpp has its own GetRegistry()).
+IAssetRegistry* GetAssetRegistryForMaterials()
+{
+    FAssetRegistryModule& Module = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    return &Module.Get();
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetMaterialParameters(const TSharedPtr<FJsonObject>& Params)
 {
     FString MaterialPath;
     if (!Params->TryGetStringField(TEXT("material_path"), MaterialPath) || MaterialPath.IsEmpty())
@@ -74,14 +58,10 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
             FString::Printf(TEXT("Could not load material at: %s"), *MaterialPath));
     }
 
-    // Build arrays per parameter type. Same shape regardless of whether the
-    // source is a base UMaterial (returns default values) or a UMaterialInstance
-    // (returns current values, which may override the base).
     TArray<TSharedPtr<FJsonValue>> Scalars;
     TArray<TSharedPtr<FJsonValue>> Vectors;
     TArray<TSharedPtr<FJsonValue>> Textures;
 
-    // Scalar parameters
     TArray<FMaterialParameterInfo> ScalarInfo;
     TArray<FGuid> ScalarGuids;
     Material->GetAllScalarParameterInfo(ScalarInfo, ScalarGuids);
@@ -89,14 +69,12 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
     {
         float Value = 0.0f;
         Material->GetScalarParameterValue(Info, Value);
-
         TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
         Entry->SetStringField(TEXT("name"), Info.Name.ToString());
         Entry->SetNumberField(TEXT("value"), Value);
         Scalars.Add(MakeShared<FJsonValueObject>(Entry));
     }
 
-    // Vector parameters
     TArray<FMaterialParameterInfo> VectorInfo;
     TArray<FGuid> VectorGuids;
     Material->GetAllVectorParameterInfo(VectorInfo, VectorGuids);
@@ -104,7 +82,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
     {
         FLinearColor Value = FLinearColor::Black;
         Material->GetVectorParameterValue(Info, Value);
-
         TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
         Entry->SetStringField(TEXT("name"), Info.Name.ToString());
         Entry->SetNumberField(TEXT("r"), Value.R);
@@ -114,7 +91,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
         Vectors.Add(MakeShared<FJsonValueObject>(Entry));
     }
 
-    // Texture parameters
     TArray<FMaterialParameterInfo> TextureInfo;
     TArray<FGuid> TextureGuids;
     Material->GetAllTextureParameterInfo(TextureInfo, TextureGuids);
@@ -122,7 +98,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
     {
         UTexture* Value = nullptr;
         Material->GetTextureParameterValue(Info, Value);
-
         TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
         Entry->SetStringField(TEXT("name"), Info.Name.ToString());
         Entry->SetStringField(TEXT("texture_path"), Value ? Value->GetPathName() : FString());
@@ -142,7 +117,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialParameters(
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleSetMaterialInstanceParam(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetMaterialInstanceParam(const TSharedPtr<FJsonObject>& Params)
 {
     FString MIPath, ParamName, ParamType;
     if (!Params->TryGetStringField(TEXT("material_instance_path"), MIPath) || MIPath.IsEmpty() ||
@@ -212,7 +187,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleSetMaterialInstancePar
             FString::Printf(TEXT("Unknown param_type '%s' — expected 'scalar', 'vector', or 'texture'"), *ParamType));
     }
 
-    // Save changes
     if (bSuccess)
     {
         UMaterialEditingLibrary::UpdateMaterialInstance(MI);
@@ -228,7 +202,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleSetMaterialInstancePar
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleCreateMaterialInstance(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleCreateMaterialInstance(const TSharedPtr<FJsonObject>& Params)
 {
     FString ParentPath, TargetPath;
     if (!Params->TryGetStringField(TEXT("parent_material_path"), ParentPath) || ParentPath.IsEmpty() ||
@@ -245,14 +219,9 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleCreateMaterialInstance
             FString::Printf(TEXT("Could not load parent material at: %s"), *ParentPath));
     }
 
-    // Split target into package path + name. CreateAsset takes them separately.
     const FString TargetPackagePath = FPackageName::GetLongPackagePath(TargetPath);
     const FString TargetName = FPackageName::GetShortName(TargetPath);
 
-    // Build the factory with the desired parent. Note: UE 5.7's
-    // UMaterialEditingLibrary has no CreateMaterialInstanceAsset helper, so we
-    // go through the factory + IAssetTools path. The factory holds InitialParent
-    // which the resulting MI inherits at construction.
     UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
     Factory->InitialParent = Parent;
 
@@ -270,9 +239,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleCreateMaterialInstance
             FString::Printf(TEXT("CreateAsset returned null. Target '%s' may already exist or parent is invalid."), *TargetPath));
     }
 
-    // Belt-and-suspenders: in case the factory didn't pick up InitialParent for
-    // some reason, set it explicitly. Also handles the case where Parent is
-    // itself a UMaterialInstance (chained instances).
     if (Parent != MI->Parent)
     {
         UMaterialEditingLibrary::SetMaterialInstanceParent(MI, Parent);
@@ -290,7 +256,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleCreateMaterialInstance
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialUses(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetMaterialUses(const TSharedPtr<FJsonObject>& Params)
 {
     FString MaterialPath;
     if (!Params->TryGetStringField(TEXT("material_path"), MaterialPath) || MaterialPath.IsEmpty())
@@ -305,7 +271,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialUses(const 
     }
 
     FName PackageName(*FPackageName::ObjectPathToPackageName(MaterialPath));
-
     TArray<FName> Referencers;
     Registry->GetReferencers(PackageName, Referencers);
 
@@ -323,7 +288,7 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleGetMaterialUses(const 
 }
 
 
-TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleListMaterialInstancesOfParent(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleListMaterialInstancesOfParent(const TSharedPtr<FJsonObject>& Params)
 {
     FString ParentPath;
     if (!Params->TryGetStringField(TEXT("parent_material_path"), ParentPath) || ParentPath.IsEmpty())
@@ -347,7 +312,6 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleListMaterialInstancesO
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("AssetRegistry module unavailable"));
     }
 
-    // Find all MaterialInstanceConstant assets under SearchPath
     FARFilter Filter;
     Filter.ClassPaths.Add(UMaterialInstanceConstant::StaticClass()->GetClassPathName());
     Filter.bRecursiveClasses = true;
@@ -357,14 +321,11 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleListMaterialInstancesO
     TArray<FAssetData> AssetData;
     Registry->GetAssets(Filter, AssetData);
 
-    // For each, load it and check parent. We have to actually load to read the
-    // parent reference reliably across UE versions.
     TArray<TSharedPtr<FJsonValue>> Matches;
     for (const FAssetData& AD : AssetData)
     {
         UMaterialInstanceConstant* MI = Cast<UMaterialInstanceConstant>(AD.GetAsset());
         if (!MI || !MI->Parent) continue;
-
         if (MI->Parent == Parent)
         {
             TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
@@ -382,3 +343,12 @@ TSharedPtr<FJsonObject> FUnrealMCPMaterialCommands::HandleListMaterialInstancesO
     Result->SetNumberField(TEXT("count"), Matches.Num());
     return Result;
 }
+
+}  // anonymous namespace
+
+
+REGISTER_MCP_COMMAND("get_material_parameters",          &HandleGetMaterialParameters);
+REGISTER_MCP_COMMAND("set_material_instance_param",      &HandleSetMaterialInstanceParam);
+REGISTER_MCP_COMMAND("create_material_instance",         &HandleCreateMaterialInstance);
+REGISTER_MCP_COMMAND("get_material_uses",                &HandleGetMaterialUses);
+REGISTER_MCP_COMMAND("list_material_instances_of_parent", &HandleListMaterialInstancesOfParent);

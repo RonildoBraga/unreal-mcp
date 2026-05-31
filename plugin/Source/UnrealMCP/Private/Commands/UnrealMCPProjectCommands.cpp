@@ -1,5 +1,18 @@
-#include "Commands/UnrealMCPProjectCommands.h"
+// v0.8.x Day 2d-equivalent — project-wide MCP command handlers, lifted out of
+// the v0.7-era FUnrealMCPProjectCommands class. Each command is a free
+// function in the anonymous namespace + a file-scope REGISTER_MCP_COMMAND
+// call at the bottom. No central dispatcher, no wrapping class. The
+// auto-registration runs via the FAutoRegistrar pattern (anonymous-namespace
+// struct whose constructor inserts into FMCPRegistry::Get() at DLL load).
+//
+// Tools:
+//   create_input_mapping     legacy DefaultInput.ini action/axis mapping
+//   get_ini / set_ini        DefaultEngine.ini etc. via GConfig
+//   execute_python           v0.8.1 escape hatch via IPythonScriptPlugin
+
 #include "Commands/UnrealMCPCommonUtils.h"
+#include "MCPRegistry.h"
+
 #include "GameFramework/InputSettings.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
@@ -7,35 +20,28 @@
 #include "IPythonScriptPlugin.h"
 #include "PythonScriptTypes.h"
 
-FUnrealMCPProjectCommands::FUnrealMCPProjectCommands()
+namespace
 {
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+// Convert a bare INI leaf name ("DefaultEngine.ini") into a full path
+// under the project's Config/ directory. Absolute paths pass through.
+FString ResolveIniPath(const FString& InFile)
+{
+    if (InFile.IsEmpty()) return FString();
+    if (FPaths::IsRelative(InFile))
+    {
+        return FPaths::Combine(FPaths::ProjectConfigDir(), InFile);
+    }
+    return InFile;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
-{
-    if (CommandType == TEXT("create_input_mapping"))
-    {
-        return HandleCreateInputMapping(Params);
-    }
-    if (CommandType == TEXT("get_ini"))
-    {
-        return HandleGetIni(Params);
-    }
-    if (CommandType == TEXT("set_ini"))
-    {
-        return HandleSetIni(Params);
-    }
-    if (CommandType == TEXT("execute_python"))
-    {
-        return HandleExecutePython(Params);
-    }
 
-    return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown project command: %s"), *CommandType));
-}
+// ─── create_input_mapping ───────────────────────────────────────────────────
 
-TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleCreateInputMapping(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleCreateInputMapping(const TSharedPtr<FJsonObject>& Params)
 {
-    // Get required parameters
     FString ActionName;
     if (!Params->TryGetStringField(TEXT("action_name"), ActionName))
     {
@@ -48,76 +54,39 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleCreateInputMapping(cons
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'key' parameter"));
     }
 
-    // Get the input settings
     UInputSettings* InputSettings = GetMutableDefault<UInputSettings>();
     if (!InputSettings)
     {
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to get input settings"));
     }
 
-    // Create the input action mapping
     FInputActionKeyMapping ActionMapping;
     ActionMapping.ActionName = FName(*ActionName);
     ActionMapping.Key = FKey(*Key);
+    if (Params->HasField(TEXT("shift"))) { ActionMapping.bShift = Params->GetBoolField(TEXT("shift")); }
+    if (Params->HasField(TEXT("ctrl")))  { ActionMapping.bCtrl  = Params->GetBoolField(TEXT("ctrl"));  }
+    if (Params->HasField(TEXT("alt")))   { ActionMapping.bAlt   = Params->GetBoolField(TEXT("alt"));   }
+    if (Params->HasField(TEXT("cmd")))   { ActionMapping.bCmd   = Params->GetBoolField(TEXT("cmd"));   }
 
-    // Add modifiers if provided
-    if (Params->HasField(TEXT("shift")))
-    {
-        ActionMapping.bShift = Params->GetBoolField(TEXT("shift"));
-    }
-    if (Params->HasField(TEXT("ctrl")))
-    {
-        ActionMapping.bCtrl = Params->GetBoolField(TEXT("ctrl"));
-    }
-    if (Params->HasField(TEXT("alt")))
-    {
-        ActionMapping.bAlt = Params->GetBoolField(TEXT("alt"));
-    }
-    if (Params->HasField(TEXT("cmd")))
-    {
-        ActionMapping.bCmd = Params->GetBoolField(TEXT("cmd"));
-    }
-
-    // Add the mapping
     InputSettings->AddActionMapping(ActionMapping);
     InputSettings->SaveConfig();
 
-    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
-    ResultObj->SetStringField(TEXT("action_name"), ActionName);
-    ResultObj->SetStringField(TEXT("key"), Key);
-    return ResultObj;
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("action_name"), ActionName);
+    Result->SetStringField(TEXT("key"), Key);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }
 
 
-// ─── v0.8.0 Day 3-4 — INI file get/set ──────────────────────────────────────
+// ─── get_ini / set_ini ──────────────────────────────────────────────────────
 //
 // Reads + writes project INI files (DefaultEngine.ini, DefaultGame.ini,
-// DefaultInput.ini, etc.) via GConfig. Section + key + value are
-// canonical INI fields. The file argument accepts the bare DefaultXxx.ini
-// leaf name — we resolve it under Project/Config/.
-//
-// Why not just edit the file via Bash? Because UE's GConfig caches the
-// merged result of Engine + Project INIs. Editing the file on disk doesn't
-// update the cache until a restart. Going through GConfig means the change
-// is live AND persisted to disk on Flush.
+// DefaultInput.ini, etc.) via GConfig. Going through GConfig (not raw file
+// read/write) means the change is live in the current editor AND persisted
+// to disk on Flush — UE's config cache stays consistent.
 
-namespace
-{
-    // Convert a bare INI leaf name ("DefaultEngine.ini") into a full path
-    // under the project's Config/ directory. Absolute paths pass through.
-    // Returns empty FString on invalid input.
-    FString ResolveIniPath(const FString& InFile)
-    {
-        if (InFile.IsEmpty()) return FString();
-        if (FPaths::IsRelative(InFile))
-        {
-            return FPaths::Combine(FPaths::ProjectConfigDir(), InFile);
-        }
-        return InFile;
-    }
-}
-
-TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleGetIni(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleGetIni(const TSharedPtr<FJsonObject>& Params)
 {
     FString File, Section, Key;
     if (!Params->TryGetStringField(TEXT("file"), File) || File.IsEmpty())
@@ -145,7 +114,6 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleGetIni(const TSharedPtr
         TSharedPtr<FJsonObject> Pairs = MakeShared<FJsonObject>();
         for (const FString& Line : Lines)
         {
-            // Each line is "Key=Value" — split on the first '='.
             int32 Eq = INDEX_NONE;
             if (Line.FindChar(TEXT('='), Eq))
             {
@@ -168,7 +136,7 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleGetIni(const TSharedPtr
     return Result;
 }
 
-TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleSetIni(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleSetIni(const TSharedPtr<FJsonObject>& Params)
 {
     FString File, Section, Key, Value;
     if (!Params->TryGetStringField(TEXT("file"), File) || File.IsEmpty())
@@ -190,7 +158,6 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleSetIni(const TSharedPtr
 
     const FString IniPath = ResolveIniPath(File);
 
-    // Read prior value so the caller can see what changed.
     FString PriorValue;
     const bool bHadValue = GConfig->GetString(*Section, *Key, PriorValue, IniPath);
 
@@ -209,33 +176,18 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleSetIni(const TSharedPtr
 }
 
 
-// ─── v0.8.1 — execute_python escape hatch (unsafe-by-default) ───────────────
+// ─── execute_python (v0.8.1 escape hatch, unsafe-by-default) ────────────────
 //
-// Closes the one capability gap relative to kvick-games/UnrealMCP. They expose
-// arbitrary Python via execute_python; we deliberately don't have a typed
-// wrapper for every possible UE Python API call (there are tens of thousands).
-// This tool gives the agent that fallback path -- gated behind an explicit
-// unsafe=true flag so the LLM has to opt in per call.
+// Closes the one capability gap relative to kvick-games/UnrealMCP. They
+// expose arbitrary Python via execute_python; we deliberately don't have a
+// typed wrapper for every possible UE Python API call. This tool gives the
+// agent that fallback path -- gated behind an explicit unsafe=true flag.
 //
-// Routes to IPythonScriptPlugin::ExecPythonCommandEx, which captures stdout /
-// stderr / Python tracebacks back into FPythonCommandEx.CommandResult and
-// .LogOutput. We unpack those into a {stdout, stderr} pair and surface
-// success based on the plugin's return value (false on Python exception).
-//
-// Safety model -- documented in the Python wrapper docstring + at every error
-// edge here:
-//   - Without unsafe=true: refuse with a clean error, NO execution
-//   - PythonScriptPlugin not loaded: clean error, NO execution
-//   - Code execution failures: success=false, traceback in stderr
-//   - Wire response shape is {success, error?, stdout, stderr} -- NOT the
-//     strict {success, error?, ...payload} contract the typed 101 use. This
-//     is the explicit escape hatch shape.
-//
-// Threading note: runs on the game thread (same as every other MCP handler
-// here). Long-running Python code will freeze the editor -- a real-world
-// limitation worth surfacing in the docstring.
+// Wire response shape is {success, error?, stdout, stderr} -- intentionally
+// NOT the strict {success, error?, ...payload} contract the typed 100+ use.
+// This is the documented escape-hatch shape.
 
-TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleExecutePython(const TSharedPtr<FJsonObject>& Params)
+TSharedPtr<FJsonObject> HandleExecutePython(const TSharedPtr<FJsonObject>& Params)
 {
     FString Code;
     if (!Params->TryGetStringField(TEXT("code"), Code) || Code.IsEmpty())
@@ -266,20 +218,13 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleExecutePython(const TSh
 
     FPythonCommandEx Command;
     Command.Command = Code;
-    // ExecuteFile despite the name: this is the multi-line "treat the input as
-    // a script body" mode. ExecuteStatement only accepts a single statement
-    // and fails on multi-line input with "multiple statements found while
-    // compiling a single statement" -- not useful for any real workflow.
-    // EvaluateStatement is for single-expression-returns-value usage; that's
-    // a future v0.8.2 nuance if we want repl-style return values.
+    // ExecuteFile = multi-line "treat input as script body" (despite the
+    // name). ExecuteStatement only accepts a single statement.
     Command.ExecutionMode = EPythonCommandExecutionMode::ExecuteFile;
     Command.FileExecutionScope = EPythonFileExecutionScope::Private;
 
     const bool bOk = Python->ExecPythonCommandEx(Command);
 
-    // FPythonCommandEx packs Info-level log lines AND uncaught traceback into
-    // LogOutput. CommandResult is empty for ExecuteStatement on success; on
-    // failure it holds the formatted Python exception.
     TArray<FString> StdoutLines;
     TArray<FString> StderrLines;
     for (const FPythonLogOutputEntry& Entry : Command.LogOutput)
@@ -290,9 +235,6 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleExecutePython(const TSh
         }
         else
         {
-            // Warning + Error both into stderr -- the LLM doesn't care to
-            // distinguish, and Python warnings frequently indicate something
-            // worth surfacing.
             StderrLines.Add(Entry.Output);
         }
     }
@@ -301,13 +243,9 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleExecutePython(const TSh
     FString Stderr = FString::Join(StderrLines, TEXT(""));
     if (!bOk && !Command.CommandResult.IsEmpty())
     {
-        // CommandResult on failure is the Python traceback -- prepend it so
-        // the LLM sees the immediate exception above the warning chatter.
         Stderr = Command.CommandResult + TEXT("\n") + Stderr;
     }
 
-    // Truncate at 32 KB each so a runaway print loop doesn't blow the MCP
-    // response budget. 32 KB is plenty for any reasonable diagnostic.
     constexpr int32 MaxCaptureBytes = 32 * 1024;
     auto Truncate = [](FString& S) {
         if (S.Len() > MaxCaptureBytes)
@@ -329,3 +267,20 @@ TSharedPtr<FJsonObject> FUnrealMCPProjectCommands::HandleExecutePython(const TSh
     }
     return Result;
 }
+
+}  // anonymous namespace
+
+
+// ─── Self-registration at definition site ──────────────────────────────────
+//
+// Each command name registers a handler pointer with FMCPRegistry at DLL
+// load. Macro expands to a file-scope FAutoRegistrar struct whose
+// constructor inserts into the singleton -- runs on initial editor open
+// AND on every Live Coding patch reload (the file-scope static survives
+// the patch). Same pattern as MCPRegistrations.cpp's central RegBatch
+// used to use, now distributed to each handler's definition file.
+
+REGISTER_MCP_COMMAND("create_input_mapping", &HandleCreateInputMapping);
+REGISTER_MCP_COMMAND("get_ini",              &HandleGetIni);
+REGISTER_MCP_COMMAND("set_ini",              &HandleSetIni);
+REGISTER_MCP_COMMAND("execute_python",       &HandleExecutePython);

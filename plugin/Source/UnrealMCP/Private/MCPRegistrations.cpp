@@ -31,12 +31,8 @@
 #include "Commands/UnrealMCPEditorCommands.h"
 #include "Commands/UnrealMCPBlueprintCommands.h"
 #include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPProjectCommands.h"
 #include "Commands/UnrealMCPUMGCommands.h"
 #include "Commands/UnrealMCPAssetCommands.h"
-#include "Commands/UnrealMCPLevelCommands.h"
-#include "Commands/UnrealMCPMaterialCommands.h"
-#include "Commands/UnrealMCPOutlinerCommands.h"
 
 #include <initializer_list>
 
@@ -168,12 +164,10 @@ namespace
 				TEXT("add_blueprint_variable"),
 			});
 
-			RegBatch<FUnrealMCPProjectCommands>({
-				TEXT("create_input_mapping"),
-				TEXT("get_ini"),
-				TEXT("set_ini"),
-				TEXT("execute_python"),
-			});
+			// project.* — create_input_mapping, get_ini, set_ini, execute_python
+			// now self-register via REGISTER_MCP_COMMAND at handler definition
+			// sites in Commands/UnrealMCPProjectCommands.cpp (v0.8.x §6.2
+			// completion). FUnrealMCPProjectCommands class deleted.
 
 			RegBatch<FUnrealMCPAssetCommands>({
 				TEXT("list_assets"),
@@ -194,27 +188,12 @@ namespace
 				TEXT("static_mesh_get_info"),
 			});
 
-			RegBatch<FUnrealMCPLevelCommands>({
-				TEXT("get_current_level"),
-				TEXT("open_level"),
-				TEXT("save_current_level"),
-			});
+			// level.* now self-registers in Commands/UnrealMCPLevelCommands.cpp
+			// (v0.8.x §6.2 completion). FUnrealMCPLevelCommands class deleted.
 
-			RegBatch<FUnrealMCPMaterialCommands>({
-				TEXT("get_material_parameters"),
-				TEXT("set_material_instance_param"),
-				TEXT("create_material_instance"),
-				TEXT("get_material_uses"),
-				TEXT("list_material_instances_of_parent"),
-			});
+			// material.* self-registers in Commands/UnrealMCPMaterialCommands.cpp.
 
-			RegBatch<FUnrealMCPOutlinerCommands>({
-				TEXT("get_outliner_folders"),
-				TEXT("move_actor_to_folder"),
-				TEXT("create_outliner_folder"),
-				TEXT("get_actors_in_folder"),
-				TEXT("move_actor_to_folder_batch"),
-			});
+			// outliner.* self-registers in Commands/UnrealMCPOutlinerCommands.cpp.
 
 			RegBatch<FUnrealMCPUMGCommands>({
 				TEXT("create_umg_widget_blueprint"),

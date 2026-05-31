@@ -4,6 +4,79 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.7.9] — 2026-05-31 — set_actor_property actually affects the scene + Vector4 + API consistency
+
+Three fixes shipped together because Phase 7.2 of lauder3 hit all three
+in the same tuning session — light/fog/exposure changes that returned
+`success` but produced zero visible change in the editor viewport.
+
+### The render-staleness bug — root cause + fix
+
+**v0.7.5's CHANGELOG promised this and the code didn't deliver.** That
+release's prose said "PostEditChangeProperty fires on the owning UObject…
+so the editor knows the actor's data was modified and refreshes Details
+panel / viewport." The actual `SetPropertyAtTarget` skipped the broadcast
+and just returned after `SetValueAtAddress`. The renderer kept its cached
+scene-proxy values; the FProperty held the new ones; nothing reconciled
+until the editor restarted.
+
+Phase 7.2 caught this in the worst-case way: a dozen consecutive writes
+(fog density, sky source type, exposure clamps, directional light color
+and intensity, post-process volume settings) all returning `success` while
+the screenshot stayed pixel-identical. Confirmed via delete-actor sanity
+test (delete propagated correctly; only `set_actor_property` was broken).
+
+`SetPropertyAtTarget` now does what v0.7.5 advertised — after
+`SetValueAtAddress` succeeds, it constructs a `FPropertyChangedEvent`
+with the **leaf** FProperty and `EPropertyChangeType::ValueSet`, then
+calls `OwningObject->PostEditChangeProperty(Event)`. For
+`UActorComponent` subclasses (which is most of what people set via this
+path — lights, fog components, post-process volumes, primitive
+components) PostEditChangeProperty internally fires
+`MarkRenderStateDirty`, which is the exact hook the rendering thread
+listens on. The next viewport draw picks up the new value.
+
+### `FVector4` struct support
+
+The walker handled `FVector`, `FRotator`, `FLinearColor`, `FColor` — but
+not `FVector4`, which UE5 uses for some `FPostProcessSettings` channels
+(`ColorSaturation`, `ColorContrast`, `ColorGain`, `ColorOffset`, etc. —
+the entire ACES color-grading panel). Setting
+`Settings.ColorSaturation` as a four-vector previously errored with
+"Unsupported struct 'Vector4'"; users had to drill into individual
+components (`Settings.ColorSaturation.W`) one float at a time.
+
+Added a single block in `SetValueAtAddress` checking
+`TBaseStructure<FVector4>::Get()` and parsing the same `[x,y,z,w]` array
+shape (W defaults to 1.0 if omitted). Slot-in alongside the existing
+struct cases.
+
+### `move_actor_to_folder` API consistency
+
+The tool took `actor_name` while every other actor-targeting tool
+(`spawn_actor`, `delete_actor`, `set_actor_property`,
+`get_actor_properties`, `set_actor_transform`) uses `name`. Easy paper
+cut — when a workflow chained these tools, the parameter name suddenly
+flipped once and produced a confusing Pydantic validation error.
+
+Renamed to `name` in:
+- the Python tool signature + docstring + JSON payload key
+- the C++ handler's `TryGetStringField` lookup + error message + result
+  field
+
+No deprecation alias kept — this fork's API is private and v0.7.x is
+explicitly experimental.
+
+### Why this matters
+
+Three real road-blocks for downstream work — chiefly Phase 7.2's
+visual-quality gate, where 90% of the tuning surface lives in
+`PostProcessSettings.*`, `LightComponent.*`, `FogComponent.*`. v0.7.5
+opened the door (dotted-path traversal); v0.7.9 actually walks through
+it.
+
+Verified: full UBT rebuild of `LauderEditor` passes after the changes.
+
 ## [0.7.8] — 2026-05-31 — Cleanup pass (dead code + dedup + doc sync)
 
 No new functionality. Post-Sprint-2 audit pruned material that had drifted:

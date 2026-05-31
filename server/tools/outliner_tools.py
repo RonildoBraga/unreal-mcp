@@ -61,20 +61,22 @@ def register_outliner_tools(mcp: FastMCP):
     @mcp.tool()
     def move_actor_to_folder(
         ctx: Context,
-        actor_name: str,
+        name: str,
         folder_path: str,
     ) -> Dict[str, Any]:
         """Set an actor's Outliner folder label.
 
         Args:
-            actor_name:  Actor's display label (the name shown in the Outliner,
+            name:        Actor's display label (the name shown in the Outliner,
                          not the internal UObject name). Case-insensitive match.
+                         Matches the `name` convention used by spawn_actor /
+                         get_actor_properties / set_actor_property.
             folder_path: Slash-separated folder path (e.g. "Lighting/Candles").
                          Pass empty string to move actor to the Outliner root.
                          Folder is auto-created if it doesn't exist.
 
         Returns:
-            {"actor_name": "...", "folder_path": "...", "success": bool}
+            {"name": "...", "folder_path": "...", "success": bool}
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -82,7 +84,7 @@ def register_outliner_tools(mcp: FastMCP):
             if not unreal:
                 return {"error": "Failed to connect to Unreal Engine"}
             return _unwrap(unreal.send_command("move_actor_to_folder", {
-                "actor_name": actor_name,
+                "name": name,
                 "folder_path": folder_path,
             }))
         except Exception as e:

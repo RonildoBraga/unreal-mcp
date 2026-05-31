@@ -963,6 +963,12 @@ static bool SetValueAtAddress(FProperty* Property, void* PropertyAddr,
             *static_cast<FRotator*>(PropertyAddr) = FRotator(P, Y, R);
             return true;
         }
+        if (StructType == TBaseStructure<FVector4>::Get())
+        {
+            double X, Y, Z, W; if (!ParseVec4(X, Y, Z, W)) { OutErrorMessage = TEXT("Vector4 expects [x,y,z,w]"); return false; }
+            *static_cast<FVector4*>(PropertyAddr) = FVector4(X, Y, Z, W);
+            return true;
+        }
         if (StructType == TBaseStructure<FLinearColor>::Get())
         {
             double R, G, B, A; if (!ParseVec4(R, G, B, A)) { OutErrorMessage = TEXT("LinearColor expects [r,g,b,a] 0..1"); return false; }
@@ -1189,5 +1195,21 @@ bool FUnrealMCPCommonUtils::SetPropertyAtTarget(const FPropertyTarget& Target,
     }
 
     void* LeafAddr = LeafProp->ContainerPtrToValuePtr<void>(Target.ContainerAddress);
-    return SetValueAtAddress(LeafProp, LeafAddr, Value, OutErrorMessage);
+    if (!SetValueAtAddress(LeafProp, LeafAddr, Value, OutErrorMessage))
+    {
+        return false;
+    }
+
+    // v0.7.9 — broadcast PostEditChangeProperty so the renderer/editor
+    // refreshes. UActorComponent subclasses use this to call
+    // MarkRenderStateDirty (lights, fog, primitive components), which is
+    // what makes set_actor_property visibly affect the scene. Without it,
+    // the FProperty value is written but the cached scene proxy keeps
+    // the old value until the editor is restarted.
+    if (Target.OwningObject)
+    {
+        FPropertyChangedEvent ChangeEvent(LeafProp, EPropertyChangeType::ValueSet);
+        Target.OwningObject->PostEditChangeProperty(ChangeEvent);
+    }
+    return true;
 }

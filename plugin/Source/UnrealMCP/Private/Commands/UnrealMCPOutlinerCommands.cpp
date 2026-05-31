@@ -81,9 +81,9 @@ TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleGetOutlinerFolders(con
 TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleMoveActorToFolder(const TSharedPtr<FJsonObject>& Params)
 {
     FString ActorName, FolderPath;
-    if (!Params->TryGetStringField(TEXT("actor_name"), ActorName) || ActorName.IsEmpty())
+    if (!Params->TryGetStringField(TEXT("name"), ActorName) || ActorName.IsEmpty())
     {
-        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'actor_name' parameter"));
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
     }
     if (!Params->TryGetStringField(TEXT("folder_path"), FolderPath))
     {
@@ -117,7 +117,7 @@ TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleMoveActorToFolder(cons
     Target->SetFolderPath(FolderPath.IsEmpty() ? NAME_None : FName(*FolderPath));
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-    Result->SetStringField(TEXT("actor_name"), ActorName);
+    Result->SetStringField(TEXT("name"), ActorName);
     Result->SetStringField(TEXT("folder_path"), FolderPath);
     Result->SetBoolField(TEXT("success"), true);
     return Result;

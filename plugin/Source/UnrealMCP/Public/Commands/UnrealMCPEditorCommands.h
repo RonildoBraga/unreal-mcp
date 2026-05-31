@@ -63,4 +63,9 @@ private:
 
     // v0.8.0 Day 2c-i+ — trigger Live Coding compile (no editor restart needed)
     TSharedPtr<FJsonObject> HandleRecompileLive(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — selection mutation + framing (round-trip with get_selected_actors).
+    TSharedPtr<FJsonObject> HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleClearSelection(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& Params);
 };

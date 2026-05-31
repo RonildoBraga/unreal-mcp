@@ -1,6 +1,6 @@
 """Editor Tools for Unreal MCP — actors, viewport, screenshots, console, PIE.
 
-Tool surface (33 tools):
+Tool surface (36 tools):
 
   Actors (12)
     get_actors_in_level             enumerate every actor in the loaded world
@@ -15,6 +15,12 @@ Tool surface (33 tools):
     get_actor_property              read a single dotted-path property
     set_actor_property              write a single dotted-path property
     spawn_blueprint_actor           spawn an actor from a BP class
+
+  Selection (4)
+    get_selected_actors             current editor selection
+    set_selected_actors             replace selection by display label / internal name
+    clear_selection                 deselect everything
+    focus_selected_actors           frame current selection in the viewport
 
   Viewport + state (8)
     take_screenshot                 PNG of editor viewport (inline Image bytes)
@@ -31,7 +37,7 @@ Tool surface (33 tools):
     get_async_compile_status        shader + asset compile queues
     recompile_live                  trigger Live Coding rebuild of the plugin DLL
 
-  PIE control (8)
+  PIE control (7)
     start_pie                       enter Play-In-Editor
     stop_pie                        exit PIE
     is_pie_active                   PIE running?
@@ -39,7 +45,6 @@ Tool surface (33 tools):
     pie_set_player                  teleport pawn 0
     pie_apply_movement              hold-W-for-N-seconds equivalent
     pie_screenshot                  in-game viewport capture (inline Image bytes)
-    get_selected_actors             current editor selection
 
 Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
 TCP to the C++ plugin. C++ side in
@@ -633,6 +638,61 @@ def register_editor_tools(mcp: FastMCP):
               ],
               "count": N
             }
+        """
+
+    @unreal_tool(mcp)
+    def set_selected_actors(ctx: Context, names: List[str]) -> Dict[str, Any]:
+        """Replace the editor's actor selection with the given names (v0.8.0).
+
+        Round-trips with `get_selected_actors`: each entry in `names` is matched
+        first against display labels (the Outliner-visible name), then against
+        internal UObject names. Both shapes returned by `get_selected_actors`
+        are accepted, so callers can pass back either field.
+
+        Existing selection is cleared first — pass an empty list to deselect
+        everything (equivalent to `clear_selection`).
+
+        `selected_count` is post-state authoritative: UE silently refuses to
+        multi-select certain special actors (AWorldSettings being the canonical
+        example). Such actors are reported in `rejected` — they were resolved
+        by name but did NOT end up in the actual selection. `missing` is the
+        separate case of names that didn't resolve to any actor in the level.
+
+        Args:
+            names: Actor display labels or internal names to select.
+
+        Returns:
+            {
+              "success": true,
+              "selected_count": N,        # actually in selection after the call
+              "requested_count": M,       # length of `names`
+              "missing":  ["...", ...],   # names that matched no actor
+              "rejected": ["...", ...]    # actors UE refused to select
+            }
+        """
+
+    @unreal_tool(mcp)
+    def clear_selection(ctx: Context) -> Dict[str, Any]:
+        """Deselect everything in the editor (v0.8.0).
+
+        Equivalent to `set_selected_actors(names=[])` but more explicit.
+
+        Returns:
+            {"success": true}
+        """
+
+    @unreal_tool(mcp)
+    def focus_selected_actors(ctx: Context) -> Dict[str, Any]:
+        """Frame the current editor selection in the viewport (v0.8.0).
+
+        Equivalent of pressing 'F' in the editor — moves perspective viewport
+        cameras so the selected actors fill the frame. Composes with
+        `set_selected_actors` for "select + frame" in two calls.
+
+        Errors if nothing is selected; call `set_selected_actors` first.
+
+        Returns:
+            {"success": true, "framed_count": N}
         """
 
     logger.info("Editor tools registered successfully")

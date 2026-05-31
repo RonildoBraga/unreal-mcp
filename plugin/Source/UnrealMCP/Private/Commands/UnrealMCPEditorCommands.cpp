@@ -179,6 +179,19 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandleRecompileLive(Params);
     }
+    // v0.8.0 Day 3-4 — selection mutation + framing
+    else if (CommandType == TEXT("set_selected_actors"))
+    {
+        return HandleSetSelectedActors(Params);
+    }
+    else if (CommandType == TEXT("clear_selection"))
+    {
+        return HandleClearSelection(Params);
+    }
+    else if (CommandType == TEXT("focus_selected_actors"))
+    {
+        return HandleFocusSelectedActors(Params);
+    }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
@@ -1815,4 +1828,195 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleRecompileLive(const TSha
     Result->SetStringField(TEXT("note"),
         TEXT("Live Coding compile started. Tail the log (read_output_log) or sleep ~30s for 'Live coding succeeded' before invoking further changes."));
     return FUnrealMCPCommonUtils::CreateSuccessResponse(Result);
+}
+
+
+// ─── v0.8.0 Day 3-4 — selection write side ──────────────────────────────────
+//
+// Round-trips with get_selected_actors. The motivating workflow: capture a
+// hand-curated subset of a dense scene by querying selection — then later
+// programmatically restore that subset (for re-screenshot, batch edit, etc.)
+// without the user having to re-pick in the Outliner.
+//
+// Name resolution is two-pass: first by display label (GetActorLabel, what
+// the Outliner shows + what get_selected_actors returns as "name"), then by
+// internal name (GetName, returned as "internal_name"). This matches what a
+// caller does when they pass a list back round-trip: both forms work.
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* NamesJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("names"), NamesJson) || NamesJson == nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'names' parameter (array of actor names)"));
+    }
+
+    UWorld* World = GEditor->GetEditorWorldContext().World();
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Snapshot the world's actors once — many lookups against a single array
+    // is much cheaper than iterating per-name. Dense scenes can hold thousands
+    // of actors; per-name GetAllActorsOfClass would be O(N*M).
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+
+    TArray<AActor*> Resolved;
+    TArray<FString> Missing;
+    Resolved.Reserve(NamesJson->Num());
+
+    for (const TSharedPtr<FJsonValue>& V : *NamesJson)
+    {
+        if (!V.IsValid() || V->Type != EJson::String) continue;
+        const FString Name = V->AsString();
+
+        AActor* Match = nullptr;
+        // First pass: display label (Outliner-visible name).
+        for (AActor* A : AllActors)
+        {
+            if (A && A->GetActorLabel() == Name) { Match = A; break; }
+        }
+        // Second pass: internal UObject name.
+        if (!Match)
+        {
+            for (AActor* A : AllActors)
+            {
+                if (A && A->GetName() == Name) { Match = A; break; }
+            }
+        }
+
+        if (Match) { Resolved.Add(Match); }
+        else       { Missing.Add(Name);  }
+    }
+
+    // Apply selection via the editor subsystem so undo + transactions + the
+    // Outliner highlight all behave as if a human did it.
+    UEditorActorSubsystem* ActorSubsystem = GEditor->GetEditorSubsystem<UEditorActorSubsystem>();
+    if (!ActorSubsystem)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("UEditorActorSubsystem unavailable"));
+    }
+
+    GEditor->SelectNone(/*bNoteSelectionChange=*/false, /*bDeselectBSPSurfs=*/true);
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (Selection)
+    {
+        Selection->BeginBatchSelectOperation();
+        for (AActor* A : Resolved)
+        {
+            GEditor->SelectActor(A, /*bInSelected=*/true, /*bNotify=*/false);
+        }
+        Selection->EndBatchSelectOperation();
+        Selection->NoteSelectionChanged();
+    }
+
+    // Post-state authoritative count + rejection list. UE silently refuses to
+    // multi-select some special actors (AWorldSettings, ABrush volumes that
+    // sometimes resist, hidden actors, etc.) — so what we ASKED for and what's
+    // actually selected can diverge. Trust the selection itself; report the
+    // names that were resolved but didn't end up selected as `rejected`.
+    TSet<AActor*> ActuallySelected;
+    if (Selection)
+    {
+        for (int32 i = 0; i < Selection->Num(); ++i)
+        {
+            if (AActor* A = Cast<AActor>(Selection->GetSelectedObject(i)))
+            {
+                ActuallySelected.Add(A);
+            }
+        }
+    }
+    TArray<FString> Rejected;
+    for (AActor* A : Resolved)
+    {
+        if (!ActuallySelected.Contains(A))
+        {
+            Rejected.Add(A->GetActorLabel());
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("selected_count"), ActuallySelected.Num());
+    Result->SetNumberField(TEXT("requested_count"), NamesJson->Num());
+
+    TArray<TSharedPtr<FJsonValue>> MissingJson;
+    MissingJson.Reserve(Missing.Num());
+    for (const FString& M : Missing) { MissingJson.Add(MakeShared<FJsonValueString>(M)); }
+    Result->SetArrayField(TEXT("missing"), MissingJson);
+
+    TArray<TSharedPtr<FJsonValue>> RejectedJson;
+    RejectedJson.Reserve(Rejected.Num());
+    for (const FString& R : Rejected) { RejectedJson.Add(MakeShared<FJsonValueString>(R)); }
+    Result->SetArrayField(TEXT("rejected"), RejectedJson);
+
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleClearSelection(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    // bNoteSelectionChange=true so the Outliner + Details panel update.
+    GEditor->SelectNone(/*bNoteSelectionChange=*/true, /*bDeselectBSPSurfs=*/true);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& /*Params*/)
+{
+    // Equivalent of pressing 'F' in the viewport — frames the current
+    // selection. Composes with set_selected_actors so callers can "select +
+    // frame" in two MCP calls without re-implementing camera math here.
+    //
+    // Uses MoveViewportCamerasToActor over the selection array directly
+    // (rather than Exec("CAMERA ALIGN")) because the Exec path depends on
+    // which viewport has focus and silently no-ops if the selection is
+    // empty — the explicit API gives us a real success/failure signal.
+    if (!GEditor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No GEditor — editor not running"));
+    }
+
+    USelection* Selection = GEditor->GetSelectedActors();
+    if (!Selection || Selection->Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Nothing selected — call set_selected_actors first"));
+    }
+
+    TArray<AActor*> SelectedActors;
+    SelectedActors.Reserve(Selection->Num());
+    for (int32 i = 0; i < Selection->Num(); ++i)
+    {
+        if (AActor* A = Cast<AActor>(Selection->GetSelectedObject(i)))
+        {
+            SelectedActors.Add(A);
+        }
+    }
+
+    if (SelectedActors.Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Selection contains no AActor — nothing to frame"));
+    }
+
+    // bActiveViewportOnly=false → move all perspective viewports so the user
+    // sees the same framing regardless of which pane has focus.
+    GEditor->MoveViewportCamerasToActor(SelectedActors, TArray<UPrimitiveComponent*>(), /*bActiveViewportOnly=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("framed_count"), SelectedActors.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }

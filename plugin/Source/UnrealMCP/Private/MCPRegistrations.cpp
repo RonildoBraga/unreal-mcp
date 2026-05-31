@@ -130,6 +130,9 @@ namespace
 				TEXT("pie_apply_movement"),
 				TEXT("pie_screenshot"),
 				TEXT("get_selected_actors"),
+				TEXT("set_selected_actors"),
+				TEXT("clear_selection"),
+				TEXT("focus_selected_actors"),
 				TEXT("recompile_live"),
 			});
 

@@ -49,13 +49,6 @@ A few tools need to transform the response after dispatch (e.g.
 `Image` content object). Those tools DON'T use this decorator —
 they call `dispatch_unreal_command()` explicitly inside a raw
 `@mcp.tool()` function.
-
-## Compatibility shim
-
-While `unreal_mcp_server.py` still rewrites `{success: false, ...}`
-responses into `{status: "error", ...}` (legacy code path that v0.8.0
-Stage 2c-iii removes), this decorator un-rewrites them back to the
-strict shape so all wrappers see consistent output.
 """
 
 import functools
@@ -137,20 +130,6 @@ def dispatch_unreal_command(
         response = unreal.send_command(command, params or {})
         if not response:
             return {"success": False, "error": "No response from Unreal Engine"}
-
-        # Compat shim — unreal_mcp_server.send_command still rewrites
-        # {success:false, error:...} into {status:"error", error:...}
-        # for legacy callers. Un-rewrite back to strict shape so all
-        # wrappers see consistent output. Stage 2c-iii removes the
-        # rewrite at the source, after which this branch is a no-op.
-        if response.get("status") == "error" and "success" not in response:
-            return {
-                "success": False,
-                "error": response.get("error")
-                or response.get("message")
-                or "Unknown Unreal error",
-            }
-
         return response
 
     except Exception as e:

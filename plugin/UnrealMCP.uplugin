@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 12,
-	"VersionName": "0.7.12",
+	"Version": 13,
+	"VersionName": "0.8.0-dev",
 	"FriendlyName": "UnrealMCP",
 	"Description": "Model Context Protocol implementation for Unreal Engine 5.7 — drive the editor from any MCP client (Claude, Cursor, Codex, Windsurf, ...).",
 	"Category": "Editor",

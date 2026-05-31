@@ -1,20 +1,29 @@
 """Editor Tools for Unreal MCP — actors, viewport, screenshots, console, PIE.
 
-Tool surface (36 tools):
+Tool surface (43 tools):
 
-  Actors (12)
-    get_actors_in_level             enumerate every actor in the loaded world
+  Actors (15)
+    get_actors_in_level             enumerate every actor in the loaded world (deprecated; prefer find_actors)
+    find_actors                     paged enumeration with class/name/folder filters (v0.8.0)
     find_actors_by_name             pattern-match against actor display names
     spawn_actor                     generic UClass spawn (any AActor subclass)
+    spawn_actor_batch               batched spawn (v0.8.0)
     spawn_static_mesh_actor         spawn StaticMeshActor + assign mesh in one call
     set_static_mesh_actor_mesh      swap a StaticMeshActor's mesh in place
     set_static_mesh_material        swap a slot's material on a SMC
     delete_actor                    remove an actor from the level
+    delete_actor_batch              batched delete (v0.8.0)
     set_actor_transform             write location/rotation/scale selectively
     get_actor_properties            dump every UPROPERTY on an actor
     get_actor_property              read a single dotted-path property
     set_actor_property              write a single dotted-path property
     spawn_blueprint_actor           spawn an actor from a BP class
+
+  Generalized object access (4) (v0.8.0)
+    get_object_property             read any UObject's property (actor / asset / CDO / class)
+    set_object_property             write any UObject's property
+    get_world_settings              convenience: get_object_property(target="WorldSettings")
+    set_world_settings              convenience: set_object_property(target="WorldSettings")
 
   Selection (4)
     get_selected_actors             current editor selection
@@ -91,6 +100,63 @@ def register_editor_tools(mcp: FastMCP):
 
         Returns:
             {"success": true, "actors": [...], "count": N}
+        """
+
+    @unreal_tool(mcp)
+    def find_actors(
+        ctx: Context,
+        pattern: Optional[str] = None,
+        class_filter: Optional[str] = None,
+        folder: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Paged actor enumeration with optional class / name / folder filters (v0.8.0).
+
+        Replaces `get_actors_in_level` for the common case where you don't
+        actually want the full scene dump. On RomanCave (~3000 actors),
+        `get_actors_in_level` returns ~744 KB; `find_actors()` with a class
+        filter or page limit returns a fraction of that.
+
+        All filters are optional and combine with AND. With no filters and the
+        default `limit=200`, returns the first 200 actors in the level and a
+        `total` so you know whether to page.
+
+        Filter semantics:
+          pattern       Case-insensitive substring; matches against display
+                        label OR internal name (an actor matches if either does).
+          class_filter  AActor subclass. Bare name ("StaticMeshActor"),
+                        /Script/Engine.* path, or anywhere-in-loaded-modules
+                        — same lookup rules as `spawn_actor`'s `type`.
+          folder        Outliner folder PREFIX match (case-insensitive).
+                        Passing "Sanctuary" matches "Sanctuary/Floor" too.
+                        Pass empty string to match only root-folder actors.
+
+        Args:
+            pattern: Optional name substring.
+            class_filter: Optional AActor subclass name or full /Script/ path.
+            folder: Optional Outliner folder prefix.
+            limit: Page size. Default 200. Pass 0 for "all matches" (be careful).
+            offset: Page offset. Default 0.
+
+        Returns:
+            {
+              "success": true,
+              "actors": [
+                {
+                  "name": "<display label>",
+                  "internal_name": "<UObject name>",
+                  "class": "...",
+                  "folder_path": "Outliner/folder/path",
+                  "location": [x, y, z]
+                },
+                ...
+              ],
+              "count": N,        # in this page (== len(actors))
+              "total": K,        # total matching the filter (pre-paging)
+              "offset": M,       # echoed
+              "limit":  L        # echoed
+            }
         """
 
     @unreal_tool(mcp)
@@ -194,6 +260,53 @@ def register_editor_tools(mcp: FastMCP):
         """
 
     @unreal_tool(mcp)
+    def spawn_actor_batch(ctx: Context, actors: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Spawn multiple actors in a single MCP round-trip (v0.8.0).
+
+        Each item in `actors` is a spawn descriptor with the same fields as
+        `spawn_actor`: required `type` + `name`, optional `location`, `rotation`,
+        `scale`. Items that fail (class lookup failed, name collision, etc.)
+        are reported per-item in `errors` — the batch as a whole still succeeds.
+
+        Use this for dense scene placement (e.g. RomanCave-style migration)
+        where N singular calls would each pay ~50 ms of TCP round-trip overhead.
+
+        Args:
+            actors: List of spawn descriptors, e.g.
+                [{"type": "StaticMeshActor", "name": "Wall_01",
+                  "location": [0,0,0], "rotation": [0,0,0]}, ...]
+
+        Returns:
+            {
+              "success": true,
+              "requested_count": M,
+              "spawned_count": N,
+              "spawned": [{"name": "..."}, ...],
+              "errors":  [{"name": "...", "error": "..."}, ...]
+            }
+        """
+
+    @unreal_tool(mcp)
+    def delete_actor_batch(ctx: Context, names: List[str]) -> Dict[str, Any]:
+        """Delete multiple actors in a single MCP round-trip (v0.8.0).
+
+        Each name resolves via the same two-pass display-label / internal-name
+        lookup that `set_selected_actors` uses, so callers can pass either form
+        (matches what `get_selected_actors` returns).
+
+        Args:
+            names: List of actor names (display labels or internal names).
+
+        Returns:
+            {
+              "success": true,
+              "requested_count": M,
+              "deleted_count": N,
+              "missing": [...]   # names that didn't resolve
+            }
+        """
+
+    @unreal_tool(mcp)
     def set_actor_transform(
         ctx: Context,
         name: str,
@@ -262,6 +375,126 @@ def register_editor_tools(mcp: FastMCP):
         Returns:
             {"success": bool, ...}
         """
+
+    @unreal_tool(mcp)
+    def get_object_property(ctx: Context, target: str, path: str) -> Dict[str, Any]:
+        """Read a property on ANY UObject by target + dotted path (v0.8.0).
+
+        The target string is resolved by FObjectLookup::Resolve — first match
+        wins:
+
+          1. /Game/-prefixed path        →  loaded as an asset
+             "/Game/M_Stone.M_Stone"     →  UMaterial
+          2. /Script/-prefixed path      →  engine type or CDO
+             "/Script/Engine.StaticMeshActor"
+          3. Actor display label or internal name in the current editor world
+             "Altar_Lantern"
+
+        After resolution, `path` is a dotted property traversal — same syntax
+        as `get_actor_property`'s `property_name`:
+
+          "Intensity"                                   plain leaf
+          "PointLightComponent.Intensity"               component hop → leaf
+          "Settings.AutoExposureBias"                   struct hop → leaf
+          "Settings.ColorGrading.Highlights.Saturation" nested struct chain
+          "OverrideMaterials.0"                         array index leaf
+
+        Args:
+            target: Object lookup string.
+            path:   Dotted property path from the resolved root.
+
+        Returns:
+            {
+              "success": true,
+              "target": "...",
+              "path": "...",
+              "root_class": "<class of resolved root>",
+              "value": <typed leaf value>
+            }
+        """
+
+    @unreal_tool(mcp)
+    def set_object_property(ctx: Context, target: str, path: str, value: Any) -> Dict[str, Any]:
+        """Write a property on ANY UObject by target + dotted path (v0.8.0).
+
+        Mirror of `get_object_property` for the write side. Broadcasts
+        PostEditChangeProperty on the owning UObject after write, so the
+        editor refreshes the Details panel + viewport (and renders update for
+        components like lights and fog).
+
+        Args:
+            target: Object lookup string (see get_object_property for syntax).
+            path:   Dotted property path.
+            value:  JSON-typed leaf value. Supported leaf kinds:
+                      number  → bool/int/float/double/byte/enum
+                      string  → str/name/enum/object (asset path)
+                      array   → struct (Vector/Rotator/Vector4/LinearColor/Color)
+
+        Returns:
+            {
+              "success": true,
+              "target": "...",
+              "path": "...",
+              "root_class": "...",
+              "leaf_property": "...",
+              "leaf_container": "...",
+              "owning_object_class": "..."
+            }
+        """
+
+    @mcp.tool()
+    def get_world_settings(ctx: Context, path: Optional[str] = None) -> Dict[str, Any]:
+        """Read the current level's WorldSettings actor (v0.8.0).
+
+        Convenience wrapper over `get_object_property` with `target` pinned to
+        "WorldSettings" — the AWorldSettings actor in the loaded editor level.
+
+        Pass `path` to read a single property (e.g. `"DefaultGameMode"`).
+        Without `path`, falls back to `get_actor_properties` for a full dump.
+
+        Lauder explicitly lost a half-day to a per-level GameMode override
+        hiding the project default — see project memory
+        `feedback_unreal_level_gamemode_override_hides_default.md`. This is the
+        programmatic equivalent of opening Window → World Settings.
+
+        Args:
+            path: Optional property path. If omitted, dumps every UPROPERTY.
+
+        Returns:
+            With path:    {success, target, path, root_class, value}
+            Without path: {success, name, properties: {...}}
+        """
+        if path:
+            return dispatch_unreal_command(
+                "get_object_property",
+                {"target": "WorldSettings", "path": path},
+            )
+        return dispatch_unreal_command(
+            "get_actor_properties",
+            {"name": "WorldSettings"},
+        )
+
+    @mcp.tool()
+    def set_world_settings(ctx: Context, path: str, value: Any) -> Dict[str, Any]:
+        """Write a property on the current level's WorldSettings actor (v0.8.0).
+
+        Convenience wrapper over `set_object_property` with `target` pinned to
+        "WorldSettings". Use to fix per-level GameMode overrides, default
+        game framework class swaps, kill-Z thresholds, etc., without opening
+        Window → World Settings.
+
+        Args:
+            path:  Dotted property path on AWorldSettings
+                   (e.g. "DefaultGameMode", "KillZ").
+            value: JSON-typed leaf value.
+
+        Returns:
+            {success, target, path, root_class, leaf_property, ...}
+        """
+        return dispatch_unreal_command(
+            "set_object_property",
+            {"target": "WorldSettings", "path": path, "value": value},
+        )
 
     @unreal_tool(mcp)
     def spawn_blueprint_actor(

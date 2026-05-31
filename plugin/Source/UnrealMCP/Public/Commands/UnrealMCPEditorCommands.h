@@ -68,4 +68,21 @@ private:
     TSharedPtr<FJsonObject> HandleSetSelectedActors(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleClearSelection(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleFocusSelectedActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — paged actor enumeration (replaces get_actors_in_level
+    // for any caller that doesn't want the full 744 KB dump). Class filter,
+    // name pattern, folder prefix, limit/offset.
+    TSharedPtr<FJsonObject> HandleFindActors(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — batch actor mutations. One MCP round-trip per scene
+    // construction step instead of N (RomanCave-style dense placement).
+    TSharedPtr<FJsonObject> HandleSpawnActorBatch(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleDeleteActorBatch(const TSharedPtr<FJsonObject>& Params);
+
+    // v0.8.0 Day 3-4 — generalized Details-panel parity (§5).
+    // Same property-path traversal as get/set_actor_property, but the target
+    // can be ANY UObject — actor display label/internal name, /Game/ asset
+    // path, /Script/ engine class, or class default object.
+    TSharedPtr<FJsonObject> HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params);
 };

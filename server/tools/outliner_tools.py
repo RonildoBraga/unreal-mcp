@@ -20,7 +20,7 @@ TCP to the C++ plugin. C++ side in
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -108,6 +108,31 @@ def register_outliner_tools(mcp: FastMCP):
         Only actors with *exactly* this folder path are returned — children
         of subfolders are not included. To get a folder's full subtree, call
         get_outliner_folders first and iterate.
+        """
+
+    @unreal_tool(mcp)
+    def move_actor_to_folder_batch(
+        ctx: Context,
+        moves: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Move multiple actors to Outliner folders in one MCP round-trip (v0.8.0).
+
+        Pairs with `spawn_actor_batch` + `delete_actor_batch` — after spawning a
+        dense scene, organize it into Outliner folders in a single call. Per-
+        item name resolution follows the same two-pass display-label /
+        internal-name lookup that `set_selected_actors` uses.
+
+        Args:
+            moves: List of `{"name": "...", "folder_path": "..."}` objects.
+                   Empty `folder_path` moves the actor to the Outliner root.
+
+        Returns:
+            {
+              "success": true,
+              "requested_count": M,
+              "moved_count": N,
+              "missing": [...]   # names that didn't resolve
+            }
         """
 
     logger.info("Outliner tools registered successfully")

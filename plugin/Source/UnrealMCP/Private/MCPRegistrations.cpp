@@ -133,6 +133,11 @@ namespace
 				TEXT("set_selected_actors"),
 				TEXT("clear_selection"),
 				TEXT("focus_selected_actors"),
+				TEXT("find_actors"),
+				TEXT("spawn_actor_batch"),
+				TEXT("delete_actor_batch"),
+				TEXT("get_object_property"),
+				TEXT("set_object_property"),
 				TEXT("recompile_live"),
 			});
 
@@ -197,6 +202,7 @@ namespace
 				TEXT("move_actor_to_folder"),
 				TEXT("create_outliner_folder"),
 				TEXT("get_actors_in_folder"),
+				TEXT("move_actor_to_folder_batch"),
 			});
 
 			RegBatch<FUnrealMCPUMGCommands>({

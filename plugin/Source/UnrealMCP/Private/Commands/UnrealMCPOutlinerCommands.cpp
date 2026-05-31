@@ -23,10 +23,11 @@ FUnrealMCPOutlinerCommands::FUnrealMCPOutlinerCommands()
 
 TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
-    if (CommandType == TEXT("get_outliner_folders"))    return HandleGetOutlinerFolders(Params);
-    if (CommandType == TEXT("move_actor_to_folder"))    return HandleMoveActorToFolder(Params);
-    if (CommandType == TEXT("create_outliner_folder"))  return HandleCreateOutlinerFolder(Params);
-    if (CommandType == TEXT("get_actors_in_folder"))    return HandleGetActorsInFolder(Params);
+    if (CommandType == TEXT("get_outliner_folders"))       return HandleGetOutlinerFolders(Params);
+    if (CommandType == TEXT("move_actor_to_folder"))       return HandleMoveActorToFolder(Params);
+    if (CommandType == TEXT("create_outliner_folder"))     return HandleCreateOutlinerFolder(Params);
+    if (CommandType == TEXT("get_actors_in_folder"))       return HandleGetActorsInFolder(Params);
+    if (CommandType == TEXT("move_actor_to_folder_batch")) return HandleMoveActorToFolderBatch(Params);
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown outliner command: %s"), *CommandType));
@@ -198,5 +199,81 @@ TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleGetActorsInFolder(cons
     Result->SetStringField(TEXT("folder_path"), FolderPath);
     Result->SetArrayField(TEXT("actors"), Actors);
     Result->SetNumberField(TEXT("count"), Actors.Num());
+    return Result;
+}
+
+
+// ─── v0.8.0 Day 3-4 — batch outliner-folder organize ────────────────────────
+//
+// Pairs with spawn_actor_batch + delete_actor_batch — after spawning a dense
+// scene, organize it into Outliner folders with one MCP call. Per-item names
+// follow the same two-pass label/internal-name lookup as set_selected_actors.
+
+TSharedPtr<FJsonObject> FUnrealMCPOutlinerCommands::HandleMoveActorToFolderBatch(const TSharedPtr<FJsonObject>& Params)
+{
+    const TArray<TSharedPtr<FJsonValue>>* MovesJson = nullptr;
+    if (!Params->TryGetArrayField(TEXT("moves"), MovesJson) || MovesJson == nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Missing 'moves' parameter (array of {name, folder_path} objects)"));
+    }
+
+    UWorld* World = EditorWorld();
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world loaded"));
+    }
+
+    // Build label + internal-name maps once for O(1) lookup per move.
+    TMap<FString, AActor*> ByLabel;
+    TMap<FString, AActor*> ByInternal;
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* A = *It;
+        if (!A) continue;
+        ByLabel.Add(A->GetActorLabel(), A);
+        ByInternal.Add(A->GetName(), A);
+    }
+
+    int32 MovedCount = 0;
+    TArray<FString> Missing;
+
+    for (const TSharedPtr<FJsonValue>& V : *MovesJson)
+    {
+        if (!V.IsValid() || V->Type != EJson::Object) continue;
+        const TSharedPtr<FJsonObject>& M = V->AsObject();
+
+        FString Name, FolderPath;
+        if (!M->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+        {
+            // Silently skip malformed entries — they're not "missing" by name,
+            // they're invalid input. Caller can diff requested_count vs moved
+            // + missing to spot the gap.
+            continue;
+        }
+        M->TryGetStringField(TEXT("folder_path"), FolderPath); // empty allowed → root
+
+        AActor** Found = ByLabel.Find(Name);
+        if (!Found) { Found = ByInternal.Find(Name); }
+        if (!Found || !*Found)
+        {
+            Missing.Add(Name);
+            continue;
+        }
+
+        (*Found)->SetFolderPath(FolderPath.IsEmpty() ? NAME_None : FName(*FolderPath));
+        MovedCount++;
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("requested_count"), MovesJson->Num());
+    Result->SetNumberField(TEXT("moved_count"), MovedCount);
+
+    TArray<TSharedPtr<FJsonValue>> MissingJson;
+    MissingJson.Reserve(Missing.Num());
+    for (const FString& Mname : Missing) { MissingJson.Add(MakeShared<FJsonValueString>(Mname)); }
+    Result->SetArrayField(TEXT("missing"), MissingJson);
+
+    Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

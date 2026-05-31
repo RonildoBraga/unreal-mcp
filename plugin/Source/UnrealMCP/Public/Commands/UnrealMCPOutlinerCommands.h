@@ -35,4 +35,6 @@ private:
     TSharedPtr<FJsonObject> HandleMoveActorToFolder(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleCreateOutlinerFolder(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetActorsInFolder(const TSharedPtr<FJsonObject>& Params);
+    // v0.8.0 Day 3-4 — batch organize after a dense scene placement.
+    TSharedPtr<FJsonObject> HandleMoveActorToFolderBatch(const TSharedPtr<FJsonObject>& Params);
 };

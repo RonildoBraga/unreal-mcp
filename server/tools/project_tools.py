@@ -1,64 +1,50 @@
-"""
-Project Tools for Unreal MCP.
+"""Project Tools for Unreal MCP — input mappings.
 
-This module provides tools for managing project-wide settings and configuration.
+Project-wide settings & configuration. v0.8.0 surface is intentionally
+minimal — INI editing, plugins, build, source control all slot into
+post-v0.8.0 project.* modules (see architecture-v0.8-plan.md §4.1).
+
+Tool surface (1 tool):
+
+    create_input_mapping    add a legacy input action or axis mapping
+
+Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
+TCP to the C++ plugin. C++ side in
+`plugin/Source/UnrealMCP/Private/Commands/UnrealMCPProjectCommands.cpp`.
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any, Dict
 
-# Get logger
+from mcp.server.fastmcp import Context, FastMCP
+
+from _registry import unreal_tool
+
 logger = logging.getLogger("UnrealMCP")
 
+
 def register_project_tools(mcp: FastMCP):
-    """Register project tools with the MCP server."""
-    
-    @mcp.tool()
+    """Register Project tools with the MCP server."""
+
+    @unreal_tool(mcp)
     def create_input_mapping(
         ctx: Context,
         action_name: str,
         key: str,
-        input_type: str = "Action"
+        input_type: str = "Action",
     ) -> Dict[str, Any]:
-        """
-        Create an input mapping for the project.
-        
+        """Create a legacy input mapping (action or axis) in DefaultInput.ini.
+
+        For Enhanced Input (the modern path used by ALauderCharacter), edit
+        the IMC asset directly — this tool only writes legacy mappings.
+
         Args:
-            action_name: Name of the input action
-            key: Key to bind (SpaceBar, LeftMouseButton, etc.)
-            input_type: Type of input mapping (Action or Axis)
-            
+            action_name: Name of the input action (e.g. "Jump", "Fire").
+            key:         Key to bind ("SpaceBar", "LeftMouseButton", ...).
+            input_type:  "Action" or "Axis". Default "Action".
+
         Returns:
-            Response indicating success or failure
+            {"success": bool, "action_name": ..., "key": ..., "input_type": ...}
         """
-        from unreal_mcp_server import get_unreal_connection
-        
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                logger.error("Failed to connect to Unreal Engine")
-                return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
-            params = {
-                "action_name": action_name,
-                "key": key,
-                "input_type": input_type
-            }
-            
-            logger.info(f"Creating input mapping '{action_name}' with key '{key}'")
-            response = unreal.send_command("create_input_mapping", params)
-            
-            if not response:
-                logger.error("No response from Unreal Engine")
-                return {"success": False, "message": "No response from Unreal Engine"}
-            
-            logger.info(f"Input mapping creation response: {response}")
-            return response
-            
-        except Exception as e:
-            error_msg = f"Error creating input mapping: {e}"
-            logger.error(error_msg)
-            return {"success": False, "message": error_msg}
-    
-    logger.info("Project tools registered successfully") 
+
+    logger.info("Project tools registered successfully")

@@ -1,26 +1,27 @@
-"""
-Asset Management Tools for Unreal MCP — Sprint 1.
+"""Asset Management Tools for Unreal MCP.
 
-Tools in this module query and mutate the Unreal Asset Registry. They are
-intentionally cheap and read-mostly so they can be called before any level
-is loaded (e.g. to enumerate a freshly-imported sample project's kit).
+Query and mutate the Unreal Asset Registry. These are intentionally cheap
+and read-mostly so they can be called before any level is loaded (e.g. to
+enumerate a freshly-imported sample project's kit).
 
-Tool surface (9 tools):
+Tool surface (11 tools):
 
-    list_assets               — enumerate assets by path
-    get_asset_info            — full metadata + deps + referencers for one asset
-    find_assets_by_class      — every asset of a UClass (e.g. all StaticMesh)
-    get_asset_dependencies    — packages this asset needs
-    get_asset_references      — packages that reference this asset
-    move_asset                — rename to a new /Game/ path (creates redirector)
-    delete_asset              — delete an asset
-    rename_asset              — change asset's leaf name in place
-    duplicate_asset           — copy to a new path
+    list_assets               enumerate assets by path
+    get_asset_info            full metadata + deps + referencers for one asset
+    find_assets_by_class      every asset of a UClass (e.g. all StaticMesh)
+    get_asset_dependencies    packages this asset needs
+    get_asset_references      packages that reference this asset
+    move_asset                rename to a new /Game/ path (creates redirector)
+    delete_asset              delete an asset
+    rename_asset              change asset's leaf name in place
+    duplicate_asset           copy to a new path
+    migrate_assets            cross-project Content-folder file copy
+    finalize_migration        fix up internal refs after subfolder migrate
+    import_asset              generic source-file → UAsset import
 
 Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
-TCP to the C++ plugin and returns the response's `result` field. The C++ side
-is implemented in `Plugin/UnrealMCP/Source/UnrealMCP/Private/Commands/
-UnrealMCPAssetCommands.cpp` — see that file for the underlying UE 5.7 APIs.
+TCP to the C++ plugin. C++ side in
+`plugin/Source/UnrealMCP/Private/Commands/UnrealMCPAssetCommands.cpp`.
 """
 
 import logging
@@ -28,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from tools._common import _unwrap
+from _registry import unreal_tool
 
 logger = logging.getLogger("UnrealMCP")
 
@@ -36,7 +37,7 @@ logger = logging.getLogger("UnrealMCP")
 def register_asset_tools(mcp: FastMCP):
     """Register Asset Management tools with the MCP server."""
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def list_assets(
         ctx: Context,
         path: str,
@@ -55,6 +56,7 @@ def register_asset_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               "assets": [{name, package_path, package_name, object_path, class_path, class_name}, ...],
               "count": N,
               "path": "/Game/...",
@@ -62,24 +64,8 @@ def register_asset_tools(mcp: FastMCP):
               "class_filter": "..." (only if filter was applied)
             }
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            params: Dict[str, Any] = {"path": path, "recursive": recursive}
-            if class_filter:
-                params["class_filter"] = class_filter
-
-            return _unwrap(unreal.send_command("list_assets", params))
-
-        except Exception as e:
-            logger.error(f"list_assets error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_asset_info(ctx: Context, asset_path: str) -> Dict[str, Any]:
         """Full metadata for one asset, including dependency + referencer graph.
 
@@ -89,6 +75,7 @@ def register_asset_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               ...AssetData fields...,
               "dependencies": [package_name, ...],
               "dependency_count": N,
@@ -96,20 +83,8 @@ def register_asset_tools(mcp: FastMCP):
               "referencer_count": N
             }
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("get_asset_info", {"asset_path": asset_path}))
-
-        except Exception as e:
-            logger.error(f"get_asset_info error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def find_assets_by_class(
         ctx: Context,
         class_name: str,
@@ -130,6 +105,7 @@ def register_asset_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               "assets": [...],
               "count": N,
               "class_name": "...",
@@ -137,24 +113,8 @@ def register_asset_tools(mcp: FastMCP):
               "search_path": "/Game/..."
             }
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("find_assets_by_class", {
-                "class_name": class_name,
-                "search_path": search_path,
-                "recursive": recursive,
-            }))
-
-        except Exception as e:
-            logger.error(f"find_assets_by_class error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_asset_dependencies(
         ctx: Context,
         asset_path: str,
@@ -170,25 +130,10 @@ def register_asset_tools(mcp: FastMCP):
                         materials with many functions, etc.) — start non-recursive.
 
         Returns:
-            {"asset_path": ..., "recursive": bool, "dependencies": [...], "count": N}
+            {"success": true, "asset_path": ..., "recursive": bool, "dependencies": [...], "count": N}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("get_asset_dependencies", {
-                "asset_path": asset_path,
-                "recursive": recursive,
-            }))
-
-        except Exception as e:
-            logger.error(f"get_asset_dependencies error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_asset_references(ctx: Context, asset_path: str) -> Dict[str, Any]:
         """Packages that reference this asset (who depends on it).
 
@@ -199,22 +144,10 @@ def register_asset_tools(mcp: FastMCP):
             asset_path: Object path like "/Game/Foo/Bar.Bar".
 
         Returns:
-            {"asset_path": ..., "referencers": [...], "count": N}
+            {"success": true, "asset_path": ..., "referencers": [...], "count": N}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("get_asset_references", {"asset_path": asset_path}))
-
-        except Exception as e:
-            logger.error(f"get_asset_references error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def move_asset(ctx: Context, from_path: str, to_path: str) -> Dict[str, Any]:
         """Move/rename an asset to a different /Game/ path.
 
@@ -233,25 +166,10 @@ def register_asset_tools(mcp: FastMCP):
             to_path:   Object path of the new location, e.g. "/Game/Baz/Bar.Bar".
 
         Returns:
-            {"from_path": ..., "to_path": ..., "success": bool, "note"?: "..."}
+            {"success": bool, "from_path": ..., "to_path": ..., "note"?: "..."}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("move_asset", {
-                "from_path": from_path,
-                "to_path": to_path,
-            }))
-
-        except Exception as e:
-            logger.error(f"move_asset error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def delete_asset(ctx: Context, asset_path: str) -> Dict[str, Any]:
         """Delete an asset. May fail if other assets reference it.
 
@@ -259,22 +177,10 @@ def register_asset_tools(mcp: FastMCP):
             asset_path: Object path of the asset to delete.
 
         Returns:
-            {"asset_path": ..., "success": bool}
+            {"success": bool, "asset_path": ...}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("delete_asset", {"asset_path": asset_path}))
-
-        except Exception as e:
-            logger.error(f"delete_asset error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def rename_asset(ctx: Context, asset_path: str, new_name: str) -> Dict[str, Any]:
         """Rename an asset in place (same /Game/ folder, new leaf name).
 
@@ -286,25 +192,10 @@ def register_asset_tools(mcp: FastMCP):
             new_name:   New leaf name (without /Game/ prefix or .extension).
 
         Returns:
-            {"asset_path": ..., "new_name": ..., "new_path": ..., "success": bool}
+            {"success": bool, "asset_path": ..., "new_name": ..., "new_path": ...}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("rename_asset", {
-                "asset_path": asset_path,
-                "new_name": new_name,
-            }))
-
-        except Exception as e:
-            logger.error(f"rename_asset error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def duplicate_asset(ctx: Context, asset_path: str, target_path: str) -> Dict[str, Any]:
         """Duplicate an asset to a new path.
 
@@ -313,27 +204,12 @@ def register_asset_tools(mcp: FastMCP):
             target_path: Target object path for the duplicate, e.g. "/Game/Baz/Bar_v2.Bar_v2".
 
         Returns:
-            {"asset_path": ..., "target_path": ..., "success": bool, "new_object_path"?: "..."}
+            {"success": bool, "asset_path": ..., "target_path": ..., "new_object_path"?: "..."}
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
+    # ─── Cross-project migration ─────────────────────────────────────────
 
-            return _unwrap(unreal.send_command("duplicate_asset", {
-                "asset_path": asset_path,
-                "target_path": target_path,
-            }))
-
-        except Exception as e:
-            logger.error(f"duplicate_asset error: {e}")
-            return {"error": str(e)}
-
-    # ─── Sprint 2 — cross-project migration ──────────────────────────────────
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def migrate_assets(
         ctx: Context,
         asset_paths: List[str],
@@ -369,39 +245,17 @@ def register_asset_tools(mcp: FastMCP):
         Returns:
             {
               "success": bool,
-              "initial_count": N,                    # how many /Game/ paths you asked for
-              "total_with_dependencies": M,           # incl. transitive /Game/ deps
-              "copied_count": K,                     # files actually copied
-              "skipped_count": S,                    # existed at destination + no overwrite
+              "initial_count": N,
+              "total_with_dependencies": M,
+              "copied_count": K,
+              "skipped_count": S,
               "destination_root": "...",
               "include_dependencies": bool,
-              "errors": ["...", ...]                 # per-file error strings, empty on full success
+              "errors": ["...", ...]
             }
-
-        After migration: open the destination project in UE and let it auto-discover
-        the new assets, or refresh the Content Browser. References from migrated
-        assets to /Game/ assets you didn't include will break (show as missing).
-        Engine + plugin references survive (they resolve in any project).
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("migrate_assets", {
-                "asset_paths": asset_paths,
-                "destination_content_path": destination_content_path,
-                "include_dependencies": include_dependencies,
-                "force_overwrite": force_overwrite,
-            }))
-
-        except Exception as e:
-            logger.error(f"migrate_assets error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def finalize_migration(
         ctx: Context,
         migrated_root: str,
@@ -426,39 +280,21 @@ def register_asset_tools(mcp: FastMCP):
                            assets (e.g. "/Game/Migrated"). Required.
             target_root:   Where to move them. Default "/Game" — strips the
                            offending subfolder so original /Game/Foo/Bar refs
-                           resolve again. Set to a different prefix if you
-                           want to relocate rather than un-prefix.
+                           resolve again.
 
         Returns:
             {
               "success": bool,
-              "renamed_count": N,            # assets actually queued for rename
-              "scanned_count": M,            # assets found under migrated_root
+              "renamed_count": N,
+              "scanned_count": M,
               "result": "Success"|"Failure"|"Pending",
               "migrated_root": "...",
               "target_root": "...",
-              "note": "..."                  # only present on non-Success
+              "note": "..."
             }
-
-        Idempotent: re-running after a successful finalize is a no-op
-        because there's nothing under migrated_root anymore.
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("finalize_migration", {
-                "migrated_root": migrated_root,
-                "target_root":   target_root,
-            }))
-        except Exception as e:
-            logger.error(f"finalize_migration error: {e}")
-            return {"error": str(e)}
-
-    @mcp.tool()
+    @unreal_tool(mcp)
     def import_asset(
         ctx: Context,
         file_path: str,
@@ -477,12 +313,6 @@ def register_asset_tools(mcp: FastMCP):
             WAV / MP3 / OGG   → SoundWave
             FBX (skeleton)    → Skeleton / PhysicsAsset
 
-        Use cases for Lauder:
-        - Importing Megascans surface PBR sets that didn't come over with
-          migrate_assets (e.g., variants downloaded later from Quixel Bridge).
-        - Importing custom audio cues for the workbench / extraction beacon.
-        - Importing Blender-exported FBX meshes for custom props.
-
         Args:
             file_path:        Absolute filesystem path to the source file.
             destination_path: /Game/-prefixed package path where the imported
@@ -491,39 +321,17 @@ def register_asset_tools(mcp: FastMCP):
             replace_existing: Whether to overwrite an asset already at the
                               destination path. Default True.
             save:             Save the new asset to disk immediately after
-                              import. Default True (False keeps it in-memory
-                              only — useful for batch operations followed by
-                              a single save_all_dirty call).
+                              import. Default True.
 
         Returns:
             {
+              "success": bool,
               "file_path": "...",
               "destination_path": "/Game/...",
               "imported_object_paths": ["/Game/Imported/MyMesh.MyMesh", ...],
               "imported_count": N,
-              "success": bool,
-              "note"?: "..."  (only on imported_count==0)
+              "note"?: "..."
             }
-
-        Note: a single source file can produce multiple imported objects.
-        FBX with skeletal animation, for example, produces SkeletalMesh +
-        Skeleton + AnimSequence + PhysicsAsset. All paths returned in
-        imported_object_paths.
         """
-        from unreal_mcp_server import get_unreal_connection
 
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-
-            return _unwrap(unreal.send_command("import_asset", {
-                "file_path": file_path,
-                "destination_path": destination_path,
-                "replace_existing": replace_existing,
-                "save": save,
-            }))
-
-        except Exception as e:
-            logger.error(f"import_asset error: {e}")
-            return {"error": str(e)}
+    logger.info("Asset tools registered successfully")

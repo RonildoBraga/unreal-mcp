@@ -1,15 +1,14 @@
-"""
-Material Tools for Unreal MCP — Sprint 2 v0.6.0.
+"""Material Tools for Unreal MCP.
 
 Inspect, create, tune material instances; trace usage relationships.
 
 Tool surface (5 tools):
 
     get_material_parameters             scalar/vector/texture params + values
-    set_material_instance_param          set a param on a material instance
-    create_material_instance             create new MI from a parent material
-    get_material_uses                    assets referencing this material
-    list_material_instances_of_parent    every MI derived from a given parent
+    set_material_instance_param         set a param on a material instance
+    create_material_instance            create new MI from a parent material
+    get_material_uses                   assets referencing this material
+    list_material_instances_of_parent   every MI derived from a given parent
 
 Use case driving the work: Lauder Phase 7.2 — once Goddess Temple master
 materials (M_BlendMaster, M_SSSMaster, M_StandardMaster, etc.) are
@@ -23,11 +22,11 @@ TCP to the C++ plugin. C++ side in
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from tools._common import _unwrap
+from _registry import unreal_tool
 
 logger = logging.getLogger("UnrealMCP")
 
@@ -35,7 +34,7 @@ logger = logging.getLogger("UnrealMCP")
 def register_material_tools(mcp: FastMCP):
     """Register Material tools with the MCP server."""
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_material_parameters(ctx: Context, material_path: str) -> Dict[str, Any]:
         """Read the parameters of a Material or MaterialInstance.
 
@@ -47,6 +46,7 @@ def register_material_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               "material_path": "...",
               "class_name": "Material" | "MaterialInstanceConstant" | ...,
               "scalar_parameters": [{name, value}, ...],
@@ -55,17 +55,8 @@ def register_material_tools(mcp: FastMCP):
               "scalar_count": N, "vector_count": M, "texture_count": K
             }
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("get_material_parameters", {"material_path": material_path}))
-        except Exception as e:
-            logger.error(f"get_material_parameters error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def set_material_instance_param(
         ctx: Context,
         material_instance_path: str,
@@ -91,24 +82,10 @@ def register_material_tools(mcp: FastMCP):
         call again with the original value, or recreate the instance.
 
         Returns:
-            {"material_instance_path": ..., "param_name": ..., "param_type": ..., "success": bool}
+            {"success": bool, "material_instance_path": ..., "param_name": ..., "param_type": ...}
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("set_material_instance_param", {
-                "material_instance_path": material_instance_path,
-                "param_name": param_name,
-                "param_type": param_type,
-                "value": value,
-            }))
-        except Exception as e:
-            logger.error(f"set_material_instance_param error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def create_material_instance(
         ctx: Context,
         parent_material_path: str,
@@ -127,22 +104,10 @@ def register_material_tools(mcp: FastMCP):
                                   null).
 
         Returns:
-            {"parent_material_path": ..., "target_path": ..., "created_object_path": ..., "success": bool}
+            {"success": bool, "parent_material_path": ..., "target_path": ..., "created_object_path": ...}
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("create_material_instance", {
-                "parent_material_path": parent_material_path,
-                "target_path": target_path,
-            }))
-        except Exception as e:
-            logger.error(f"create_material_instance error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def get_material_uses(ctx: Context, material_path: str) -> Dict[str, Any]:
         """List assets that reference this material — meshes, blueprints, etc.
 
@@ -154,19 +119,10 @@ def register_material_tools(mcp: FastMCP):
             material_path: Object path to the material or material instance.
 
         Returns:
-            {"material_path": ..., "referencers": ["...", ...], "count": N}
+            {"success": true, "material_path": ..., "referencers": ["...", ...], "count": N}
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("get_material_uses", {"material_path": material_path}))
-        except Exception as e:
-            logger.error(f"get_material_uses error: {e}")
-            return {"error": str(e)}
 
-    @mcp.tool()
+    @unreal_tool(mcp)
     def list_material_instances_of_parent(
         ctx: Context,
         parent_material_path: str,
@@ -181,6 +137,7 @@ def register_material_tools(mcp: FastMCP):
 
         Returns:
             {
+              "success": true,
               "parent_material_path": "...",
               "search_path": "/Game/...",
               "material_instances": [{name, object_path, package_path}, ...],
@@ -194,15 +151,5 @@ def register_material_tools(mcp: FastMCP):
         - Each candidate MI is loaded to read its parent, which is reliable
           but not free. For very large projects, narrow search_path.
         """
-        from unreal_mcp_server import get_unreal_connection
-        try:
-            unreal = get_unreal_connection()
-            if not unreal:
-                return {"error": "Failed to connect to Unreal Engine"}
-            return _unwrap(unreal.send_command("list_material_instances_of_parent", {
-                "parent_material_path": parent_material_path,
-                "search_path": search_path,
-            }))
-        except Exception as e:
-            logger.error(f"list_material_instances_of_parent error: {e}")
-            return {"error": str(e)}
+
+    logger.info("Material tools registered successfully")

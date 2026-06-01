@@ -3,12 +3,15 @@
 Basic level lifecycle: know what's loaded, switch levels, save changes.
 World Partition queries and streaming-sublevel management come later.
 
-Tool surface (4 tools):
+Tool surface (7 tools):
 
-    get_current_level     name + path of the loaded editor world
-    open_level            load a level by /Game/ path
-    save_current_level    save the currently loaded level
-    create_landscape      spawn a Landscape Actor (C++ — Python can't)
+    get_current_level         name + path of the loaded editor world
+    open_level                load a level by /Game/ path
+    save_current_level        save the currently loaded level
+    create_landscape          spawn a Landscape Actor (C++ — Python can't)
+    sculpt_landscape_noise    additively layer fractal Perlin noise
+    sculpt_landscape_hill     gaussian peak/depression at a world XY
+    flatten_landscape         set every vertex to a uniform height
 
 Wire format: each tool sends `{type: "<command_name>", params: {...}}` over
 TCP to the C++ plugin and returns the response. C++ side in
@@ -113,6 +116,83 @@ def register_level_tools(mcp: FastMCP):
               "total_verts_x": 505, "total_verts_y": 505,
               "total_components": 16
             }
+        """
+
+    @unreal_tool(mcp)
+    def sculpt_landscape_noise(
+        ctx: Context,
+        label: str,
+        scale_meters: float = 80.0,
+        height_meters: float = 8.0,
+        octaves: int = 4,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """Additively layer fractal Perlin noise onto an existing Landscape.
+
+        Compose with sculpt_landscape_hill: noise first for rolling terrain,
+        then hill calls for specific landmarks.
+
+        Args:
+            label:        Outliner label of the Landscape actor.
+            scale_meters: wavelength of the base octave in world meters. Bigger
+                          = wider, gentler features. 80 m gives valley/ridge
+                          patterns you can walk through; 20 m gives bumpy
+                          ground; 200 m gives subtle continental shape.
+            height_meters: max ± height variation. 8 m is a noticeable but
+                          not dramatic roll. Iceland-rugged tends 10-25 m.
+            octaves:      1-6. Each octave halves amplitude, doubles freq.
+                          4 octaves gives a good rugged-but-not-noisy look.
+            seed:         offsets the noise position; change for variation
+                          without retuning scale/height.
+
+        Returns:
+            {"success": true, "label": "...", "verts_modified": 255025,
+             "scale_meters": 80, "height_meters": 8, "octaves": 4, "seed": 42}
+        """
+
+    @unreal_tool(mcp)
+    def sculpt_landscape_hill(
+        ctx: Context,
+        label: str,
+        center: Optional[Dict[str, float]] = None,
+        radius_meters: float = 30.0,
+        peak_meters: float = 10.0,
+    ) -> Dict[str, Any]:
+        """Add a gaussian peak (positive) or depression (negative) on a Landscape.
+
+        Smooth falloff: at distance == radius, contribution is ~37% of peak;
+        at 2× radius, ~1.8%. Influence capped at 3× radius (negligible beyond).
+
+        Args:
+            label:         Outliner label of the Landscape actor.
+            center:        {x, y, z?} in world cm. Z is ignored — we project
+                           onto the landscape's XY plane. Default (0, 0, 0).
+            radius_meters: gaussian half-width in meters (default 30).
+            peak_meters:   height at center, in meters. Positive = hill,
+                           negative = pit/crater (default 10).
+
+        Returns:
+            {"success": true, "label": "...", "verts_modified": N,
+             "center": {"x": ..., "y": ...}, "radius_meters": 30,
+             "peak_meters": 10}
+        """
+
+    @unreal_tool(mcp)
+    def flatten_landscape(
+        ctx: Context,
+        label: str,
+        z_meters: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Reset every vertex of a Landscape to a uniform world Z.
+
+        Useful as an "undo" before re-running a procedural pass.
+
+        Args:
+            label:    Outliner label of the Landscape actor.
+            z_meters: target world Z (default 0, the create_landscape baseline).
+
+        Returns:
+            {"success": true, "label": "...", "verts_modified": N, "z_meters": 0}
         """
 
     logger.info("Level tools registered successfully")

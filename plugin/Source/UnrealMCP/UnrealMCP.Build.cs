@@ -49,6 +49,8 @@ public class UnrealMCP : ModuleRules
 				"LevelEditor",        // Sprint 1: ULevelEditorSubsystem (open/save level tools)
 				"MaterialEditor",     // Sprint 2: UMaterialEditingLibrary (MI tuning + creation)
 				"Landscape",          // v0.9.x: ALandscape::Import for create_landscape
+				"LandscapeEditor",    // v0.9.x: FLandscapeEditDataInterface for sculpt_landscape_*
+				"Foliage",            // v0.9.x: LandscapeEdit.h transitively includes InstancedFoliageActor.h
 				"Slate",
 				"SlateCore",
 				"UMG",

@@ -894,6 +894,17 @@ TSharedPtr<FJsonObject> HandleTakeScreenshot(const TSharedPtr<FJsonObject>& Para
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active editor viewport"));
     }
 
+    // PIE-active guard. During Play-In-Editor, GEditor->GetActiveViewport()
+    // returns a PIE viewport whose Client is NOT an FEditorViewportClient —
+    // it's an FGameViewportClient (or similar). The static_cast below would
+    // produce an invalid pointer and the Invalidate() call would crash with
+    // EXCEPTION_ACCESS_VIOLATION. Route the user to pie_screenshot instead.
+    if (GEditor->PlayWorld != nullptr)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("take_screenshot is not supported during PIE — use pie_screenshot for in-game capture"));
+    }
+
     FViewport* Viewport = GEditor->GetActiveViewport();
 
     // v0.7.7 — force a fresh redraw before grabbing pixels.

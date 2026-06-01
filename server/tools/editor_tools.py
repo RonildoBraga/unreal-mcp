@@ -610,6 +610,12 @@ def register_editor_tools(mcp: FastMCP):
         it directly), with the absolute filepath also recorded on disk for
         long-term reference.
 
+        NOT supported during Play-In-Editor — the editor viewport client
+        is replaced by a game viewport client during PIE, and the editor-
+        screenshot path can't capture from it. Use `pie_screenshot` for
+        in-game capture while PIE is active. Calling this during PIE
+        returns a clear error rather than crashing the editor (v0.8.2).
+
         Args:
             filename: Output filename. Bare names ("screenshot.png") land
                       under <Project>/Saved/Screenshots/. Absolute paths

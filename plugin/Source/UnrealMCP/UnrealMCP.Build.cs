@@ -48,6 +48,7 @@ public class UnrealMCP : ModuleRules
 				"EditorSubsystem",
 				"LevelEditor",        // Sprint 1: ULevelEditorSubsystem (open/save level tools)
 				"MaterialEditor",     // Sprint 2: UMaterialEditingLibrary (MI tuning + creation)
+				"Landscape",          // v0.9.x: ALandscape::Import for create_landscape
 				"Slate",
 				"SlateCore",
 				"UMG",

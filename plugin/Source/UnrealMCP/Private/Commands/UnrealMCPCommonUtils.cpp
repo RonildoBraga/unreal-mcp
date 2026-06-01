@@ -108,20 +108,40 @@ FVector2D FUnrealMCPCommonUtils::GetVector2DFromJson(const TSharedPtr<FJsonObjec
 FVector FUnrealMCPCommonUtils::GetVectorFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& FieldName)
 {
     FVector Result(0.0f, 0.0f, 0.0f);
-    
+
     if (!JsonObject->HasField(FieldName))
     {
         return Result;
     }
-    
+
+    // Accept BOTH wire shapes:
+    //   array  [x, y, z]            — the original spawn/transform tools use this
+    //   object {"x":, "y":, "z":}   — newer Python wrappers (create_landscape,
+    //                                 sculpt_landscape_hill) pass dicts
+    // Without the object branch, dict-form vectors silently parse to (0,0,0) —
+    // which is how a hill meant for (-8000,-13000) landed on the origin.
     const TArray<TSharedPtr<FJsonValue>>* JsonArray;
     if (JsonObject->TryGetArrayField(FieldName, JsonArray) && JsonArray->Num() >= 3)
     {
         Result.X = (float)(*JsonArray)[0]->AsNumber();
         Result.Y = (float)(*JsonArray)[1]->AsNumber();
         Result.Z = (float)(*JsonArray)[2]->AsNumber();
+        return Result;
     }
-    
+
+    const TSharedPtr<FJsonObject>* JsonObj;
+    if (JsonObject->TryGetObjectField(FieldName, JsonObj))
+    {
+        // z is optional — defaults to 0 (sculpt_landscape_hill ignores it anyway).
+        double X = 0.0, Y = 0.0, Z = 0.0;
+        (*JsonObj)->TryGetNumberField(TEXT("x"), X);
+        (*JsonObj)->TryGetNumberField(TEXT("y"), Y);
+        (*JsonObj)->TryGetNumberField(TEXT("z"), Z);
+        Result.X = (float)X;
+        Result.Y = (float)Y;
+        Result.Z = (float)Z;
+    }
+
     return Result;
 }
 

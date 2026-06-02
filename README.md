@@ -33,7 +33,7 @@ The split:
 
 The system bridges your MCP client (Claude Desktop, Claude Code, Cursor, Codex CLI, Windsurf, …) to a C++ plugin running inside the Unreal Editor via a Python server on `localhost:55557`. Once configured, the LLM can spawn actors, set properties, run Play-in-Editor, take screenshots, walk the asset registry, drive UMG widgets, import meshes — 101 tools spanning the entire editor surface — all from natural language.
 
-Full tool catalog: [docs/tools/](docs/tools/) (or run `server/smoke_dispatch.py` for the live list).
+Full tool catalog: [docs/tools/](docs/tools/) (or run `server/smoke_dispatch.py --list-only` for the live smoke selection).
 Architecture: [docs/architecture.md](docs/architecture.md).
 
 ## Quick start

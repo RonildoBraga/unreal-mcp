@@ -52,12 +52,16 @@ These shape every "add this?" / "kill this?" / "rewrite this?" decision.
 
 ---
 
-## Current state (truth, 2026-05-31)
+## Current state (truth, 2026-06-02)
 
-**102 MCP commands.** Cold-start auto-registration shows 94+ from the
-`FAutoRegistrar`; the rest land via file-scope `REGISTER_MCP_COMMAND` in
-each handler's `.cpp`. `smoke_dispatch.py` shows 95/95 dispatched, 0
-unknown. Pytest (`tests/test_object_property.py`) shows 21/21 pass.
+**Large MCP surface.** Cold-start auto-registration shows commands from the
+`FAutoRegistrar` plus file-scope `REGISTER_MCP_COMMAND` declarations in each
+handler's `.cpp`. `smoke_dispatch.py` now defaults to an explicit
+safe/read-only command allowlist (29 commands in the current tool surface)
+and requires `--allow-mutating` for full empty-param dispatch (99 currently
+selected, with lifecycle commands still skipped). Pytest
+(`tests/test_object_property.py`) shows 21/21 pass; the pure-Python smoke
+classifier tests show 7/7 pass.
 
 **Architecture: complete.** All 9 command categories use the
 self-registration pattern (see commit `adb1a8b`). `MCPRegistrations.cpp`
@@ -254,9 +258,10 @@ If you're adding a tool (yourself or as a contributor):
    examples, failure modes. This is what the LLM sees; vague docstrings
    produce confused tool calls.
 
-6. **Smoke test.** `server/smoke_dispatch.py` should dispatch your new
-   command name without `"Unknown command"`. Targeted integration test
-   in `server/tests/` if the behavior is non-trivial.
+6. **Smoke test.** Classify the command in `server/smoke_dispatch.py`.
+   Read-only commands can join the safe default allowlist; mutating commands
+   remain skipped unless `--allow-mutating` is passed. Targeted integration
+   test in `server/tests/` if the behavior is non-trivial.
 
 7. **Bump the CHANGELOG.** A line under the next release's section.
    Don't write a separate plan doc.
@@ -267,6 +272,25 @@ If you're adding a tool (yourself or as a contributor):
 
 When a feature ships, gets deferred, or gets killed, capture WHY here so
 future-us doesn't spend hours rediscovering the reasoning.
+
+### 2026-06-02: Smoke tests are safe by default
+
+**Decision:** `server/smoke_dispatch.py` only dispatches an explicit
+safe/read-only allowlist by default. Mutating, saving, viewport/UI,
+screenshot, PIE-control, and code-execution tools are skipped unless the
+caller passes `--allow-mutating`; lifecycle commands like `start_pie`,
+`stop_pie`, `pie_apply_movement`, and `recompile_live` are still skipped
+for empty-param smoke even with that opt-in.
+
+**Why:** Empty-param dispatch proved that handlers are registered, but it
+also executed tools whose default arguments have real editor effects
+(`create_landscape`, followed by `save_current_level`). Validation should
+not modify a user's currently open project.
+
+**Consequence:** New tools are not smoke-dispatched by default until they
+are deliberately classified. `--list-only` shows selected and skipped
+commands without opening a socket, and `tests/test_smoke_dispatch.py`
+guards the classification rules.
 
 ### 2026-05-31: Single-maintainer execution
 

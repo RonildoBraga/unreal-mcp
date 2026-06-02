@@ -1,26 +1,36 @@
 """Canonical dispatch smoke for unreal-mcp v0.8.0+.
 
-Pings every registered MCP command with empty params and asserts the
-response is NOT the "Unknown command: <name>" fallback from the bridge.
-Implements §8 Q5 of `docs/architecture-v0.8-plan.md`: catches the
-"did I forget to wire X" class of bug where a new command name exists
-in source but isn't registered in the FMCPRegistry on the C++ side.
+By default this script pings only the explicit safe/read-only command
+allowlist with empty params and asserts the response is NOT the "Unknown
+command: <name>" fallback from the bridge. Implements the spirit of §8 Q5
+of `docs/architecture-v0.8-plan.md`: catches the "did I forget to wire X"
+class of bug where a command name exists in source but isn't registered in
+the FMCPRegistry on the C++ side, without changing the open editor project.
 
 How it works:
 
 1. Imports the FastMCP server module to enumerate every Python wrapper
    name. This is the agent-facing surface.
-2. Maps each wrapper to its underlying wire-command name. For ``@unreal_tool``
-   decorated wrappers the wire command is the function name verbatim. The
-   handful of raw ``@mcp.tool()`` wrappers (take_screenshot, pie_screenshot,
-   get/set_world_settings, get_component_property, get_static_mesh_material)
-   are Python-side composites that dispatch to other commands; we map them
-   to their underlying wire targets so the dispatch check still hits the
-   real C++ handlers.
-3. For each unique wire-command name, sends a raw socket payload with
-   empty params and reads the response. Asserts the response is NOT
-   the bridge's "Unknown command: ..." error from
-   ``MCPBridge.cpp`` / ``MCPRegistry.cpp``.
+2. Classifies wrapper names by their wire behavior. For ``@unreal_tool``
+   decorated wrappers the wire command is the function name verbatim. Raw
+   ``@mcp.tool()`` wrappers that have matching wire commands, such as
+   ``take_screenshot`` and ``pie_screenshot``, are classified by name. Pure
+   Python composites such as ``get_world_settings`` and
+   ``get_component_property`` are skipped rather than sent as fake wire
+   commands.
+3. For each selected unique wire-command name, sends a raw socket payload
+   with empty params and reads the response. Asserts the response is NOT
+   the bridge's "Unknown command: ..." error from ``MCPBridge.cpp`` /
+   ``MCPRegistry.cpp``.
+
+Safety model:
+
+The default mode is intentionally incomplete: commands are called only if
+they are in ``SAFE_DEFAULT_WIRE_COMMANDS``. Mutating, saving, viewport/UI,
+screenshot, PIE-control, and code-execution commands are skipped unless the
+caller explicitly passes ``--allow-mutating``. That opt-in can modify, save,
+or otherwise disturb the currently open Unreal project; use it only in a
+throwaway project or after taking an intentional checkpoint.
 
 Windows TCP race classification (hardened in v0.8.1 per Codex review):
 
@@ -37,24 +47,26 @@ the log shows no response, classify as UNCONFIRMED (handler may have
 hung) and surface as a real failure.
 
 Exit codes:
-    0 — every registered command dispatched to a real handler.
+    0 — every selected command dispatched to a real handler.
     1 — at least one command came back "Unknown command" OR timed out
         without a corresponding editor-log entry.
 
 Run with the editor open and the MCP server listening on TCP 55557:
 
-    python -m smoke_dispatch       # auto-discover via Python server
-    python smoke_dispatch.py       # same
+    python -m smoke_dispatch              # safe/read-only default
+    python smoke_dispatch.py --list-only  # show selection, no socket traffic
+    python smoke_dispatch.py --allow-mutating
 """
 
+import argparse
+from dataclasses import dataclass
 import json
 import os
 import re
 import socket
 import sys
-import time
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 # Add cwd to path so we can import the server module when run as a script.
 sys.path.insert(0, ".")
@@ -96,19 +108,67 @@ PYTHON_ONLY = {
     "get_static_mesh_material",    # → get_object_property
 }
 
-# Commands that would have meaningful side effects on empty params (e.g.
-# spawn an actor named "", apply a tick of zero-vector movement). These
-# still dispatch cleanly — the smoke just won't send them with empty params.
-SKIP_EMPTY = {
-    # PIE control: starting + applying movement on the editor world is too
-    # invasive for an idempotent smoke. The dispatch correctness is covered
-    # by the per-release integration tests.
+# Commands that are especially unsuitable for empty-param dispatch even when
+# a caller opts into the mutating smoke. Their behavior is lifecycle-oriented,
+# long-running, or intentionally invasive rather than a simple handler lookup.
+NEVER_EMPTY_SMOKE = {
     "start_pie",
     "stop_pie",
     "pie_apply_movement",
-    # Live Coding compile fires a build; skip in the smoke.
     "recompile_live",
 }
+
+# Safe-default smoke surface. Every entry must be project-state read-only and
+# tolerate empty params by returning either a real response or a validation
+# error. Commands not listed here are skipped by default, even if they happen
+# to be harmless today; new tools become visible in the skipped list until
+# deliberately classified.
+SAFE_DEFAULT_WIRE_COMMANDS = {
+    # Bridge / level reads.
+    "ping",
+    "get_current_level",
+    # Actor / object reads.
+    "get_actors_in_level",
+    "find_actors",
+    "find_actors_by_name",
+    "get_actor_properties",
+    "get_actor_property",
+    "get_actor_transform",
+    "get_object_property",
+    "get_selected_actors",
+    # Viewport / editor reads.
+    "get_viewport_camera",
+    "get_viewport_mode",
+    "get_cvar",
+    "read_output_log",
+    "get_async_compile_status",
+    "is_pie_active",
+    # Asset reads.
+    "list_assets",
+    "get_asset_info",
+    "find_assets_by_class",
+    "get_asset_dependencies",
+    "get_asset_references",
+    "static_mesh_get_info",
+    # Blueprint / material / outliner / project reads.
+    "find_blueprint_nodes",
+    "get_material_parameters",
+    "get_material_uses",
+    "list_material_instances_of_parent",
+    "get_outliner_folders",
+    "get_actors_in_folder",
+    "get_ini",
+}
+
+
+@dataclass(frozen=True)
+class SmokeSelection:
+    """Classified command set for one smoke run."""
+
+    commands: list[str]
+    skipped_python_only: list[str]
+    skipped_never_empty: list[str]
+    skipped_unsafe: list[str]
 
 
 # ─── Editor-log cross-check for timeout classification ──────────────────────
@@ -180,24 +240,99 @@ def editor_logged_response_for(log_path: Path, command: str, since_seconds: floa
     return bool(response_pat.search(tail[last_received : last_received + 4000]))
 
 
-def collect_wire_commands():
-    """Return the set of wire-command names the smoke should ping."""
+def classify_wire_commands(
+    tool_names: Iterable[str],
+    *,
+    allow_mutating: bool = False,
+) -> SmokeSelection:
+    """Classify tool names into selected and skipped wire commands."""
+    all_tool_names = set(tool_names)
+    skipped_python_only = sorted(all_tool_names & PYTHON_ONLY)
+    candidates = (all_tool_names - PYTHON_ONLY) | {"ping"}
+
+    if allow_mutating:
+        commands = candidates - NEVER_EMPTY_SMOKE
+        skipped_unsafe: set[str] = set()
+    else:
+        commands = candidates & SAFE_DEFAULT_WIRE_COMMANDS
+        skipped_unsafe = candidates - commands - NEVER_EMPTY_SMOKE
+
+    return SmokeSelection(
+        commands=sorted(commands),
+        skipped_python_only=skipped_python_only,
+        skipped_never_empty=sorted((candidates - commands) & NEVER_EMPTY_SMOKE),
+        skipped_unsafe=sorted(skipped_unsafe),
+    )
+
+
+def collect_wire_commands(*, allow_mutating: bool = False) -> SmokeSelection:
+    """Return the classified wire-command names for the smoke."""
     import unreal_mcp_server  # noqa: WPS433 — intentional late import
 
-    wire_commands = set()
-    for tool in unreal_mcp_server.mcp._tool_manager.list_tools():  # noqa: WPS437
-        if tool.name in PYTHON_ONLY or tool.name in SKIP_EMPTY:
-            continue
-        wire_commands.add(tool.name)
-
-    # Always include "ping" — it's the bridge-level virtual command.
-    wire_commands.add("ping")
-    return sorted(wire_commands)
+    return classify_wire_commands(
+        (tool.name for tool in unreal_mcp_server.mcp._tool_manager.list_tools()),  # noqa: WPS437
+        allow_mutating=allow_mutating,
+    )
 
 
-def main() -> int:
-    commands = collect_wire_commands()
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse CLI args."""
+    parser = argparse.ArgumentParser(
+        description="Dispatch-smoke UnrealMCP commands over the local TCP bridge.",
+    )
+    parser.add_argument(
+        "--allow-mutating",
+        action="store_true",
+        help=(
+            "Include mutating/saving/UI/runtime commands. This can modify or "
+            "save the currently open Unreal project."
+        ),
+    )
+    parser.add_argument(
+        "--list-only",
+        action="store_true",
+        help="Print the selected/skipped command sets without opening sockets.",
+    )
+    return parser.parse_args(argv)
+
+
+def print_selection(selection: SmokeSelection, *, allow_mutating: bool) -> None:
+    """Print selection metadata before a run."""
+    mode = "MUTATING OPT-IN" if allow_mutating else "safe/read-only default"
+    print(f"  mode: {mode}")
+    print(f"  selected commands: {len(selection.commands)}")
+    if selection.skipped_unsafe:
+        print(f"  skipped unsafe/unclassified: {len(selection.skipped_unsafe)}")
+    if selection.skipped_never_empty:
+        print(f"  skipped never-empty-smoke: {len(selection.skipped_never_empty)}")
+    if selection.skipped_python_only:
+        print(f"  skipped Python-only composites: {len(selection.skipped_python_only)}")
+    print()
+
+
+def print_list(name: str, values: list[str]) -> None:
+    """Print a named command list."""
+    if not values:
+        return
+    print(name)
+    for value in values:
+        print(f"  - {value}")
+    print()
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parse_args(argv)
+    selection = collect_wire_commands(allow_mutating=args.allow_mutating)
+    commands = selection.commands
     print(f"=== unreal-mcp dispatch smoke ({len(commands)} commands) ===\n")
+    print_selection(selection, allow_mutating=args.allow_mutating)
+
+    if args.list_only:
+        print_list("Selected commands:", commands)
+        print_list("Skipped unsafe/unclassified:", selection.skipped_unsafe)
+        print_list("Skipped never-empty-smoke:", selection.skipped_never_empty)
+        print_list("Skipped Python-only composites:", selection.skipped_python_only)
+        return 0
 
     log_path = find_editor_log()
     if log_path:

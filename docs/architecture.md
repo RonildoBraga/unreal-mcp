@@ -134,15 +134,21 @@ example.
 
 ## Coverage canary
 
-`server/smoke_dispatch.py` pings every registered command with empty params
+`server/smoke_dispatch.py` pings selected wire commands with empty params
 and asserts the response is NOT the bridge's "Unknown command: …" fallback.
 This is the §8 Q5 commitment from the v0.8.0 architecture plan — it catches
-"did I forget to wire a new command name" before the user does. Run after
-any plugin rebuild + editor reopen:
+"did I forget to wire a new command name" before the user does.
+
+The default smoke is safe/read-only: mutating, saving, viewport/UI,
+screenshot, PIE-control, and code-execution commands are skipped unless the
+caller explicitly passes `--allow-mutating`. Use the mutating mode only in a
+throwaway project or after an intentional checkpoint.
 
 ```bash
 cd server
-./.venv/Scripts/python smoke_dispatch.py   # exit 0 = every command dispatched
+uv run python smoke_dispatch.py --list-only  # no socket traffic
+uv run python smoke_dispatch.py              # safe/read-only editor smoke
+uv run python smoke_dispatch.py --allow-mutating
 ```
 
 Timeouts (Windows-specific TCP RST-after-FIN race on small-payload fast-
@@ -156,13 +162,9 @@ Both sides need a change. See `CONTRIBUTING.md` for the style guide. The
 short version:
 
 1. **C++ side:**
-   - Add a handler method to the appropriate `FUnrealMCP<Category>Commands`
-     class (`HandleXxx`).
-   - Wire it in the class's `HandleCommand` dispatch (the per-class if/else
-     — yes, the cleanup migration to free-function self-registration is
-     pending).
-   - Add the command name to `plugin/Source/UnrealMCP/Private/MCPRegistrations.cpp`
-     in the appropriate `RegBatch<FUnrealMCP<Category>Commands>({...})` call.
+   - Add a handler free function to the appropriate command file under
+     `plugin/Source/UnrealMCP/Private/Commands/`.
+   - Register it at the definition site with `REGISTER_MCP_COMMAND`.
 2. **Python side:**
    - Add a `@unreal_tool(mcp)` function to the matching
      `server/tools/<category>_tools.py`. Function body can be just the
@@ -175,6 +177,7 @@ short version:
    → reopen the editor. The new command name appears in `tools/list` on
    next connect. For changes to existing handler bodies (no new command
    names), `recompile_live` MCP call triggers Live Coding instead.
-4. **Validate:** `smoke_dispatch.py` confirms the new command name
-   dispatches; a targeted integration smoke (see `_smoke_*.py` patterns
-   in past Day 3-4 commits) confirms the actual behavior.
+4. **Validate:** classify the new command in `smoke_dispatch.py`. Read-only
+   commands can join the safe default allowlist; mutating commands remain
+   skipped unless `--allow-mutating` is passed. A targeted integration test
+   confirms the actual behavior.

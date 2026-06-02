@@ -35,7 +35,8 @@ forward to `get_object_property` / `set_object_property` with target pinned
 to `WorldSettings`; `get_component_property` / `get_static_mesh_material`
 forward to `get_object_property` with a composed dotted path. These appear
 in the Python tool surface but don't count toward the C++ command-name
-total. The canonical `smoke_dispatch.py` covers 95 unique wire commands.)
+total. The canonical `smoke_dispatch.py` is safe/read-only by default and
+requires `--allow-mutating` for full empty-param dispatch.)
 
 ## Cross-category power tools
 
@@ -130,9 +131,11 @@ grep -rn '@unreal_tool\|@mcp.tool' server/tools/   # list every registered tool
 grep -A 30 'def find_actors' server/tools/editor_tools.py   # see a docstring
 ```
 
-Or, programmatically, with the editor running:
+Or, programmatically:
 
 ```bash
 cd server
-./.venv/Scripts/python smoke_dispatch.py   # 95/95 dispatched, 0 unknown
+uv run python smoke_dispatch.py --list-only  # no socket traffic
+uv run python smoke_dispatch.py              # safe/read-only editor smoke
+uv run python smoke_dispatch.py --allow-mutating  # throwaway/checkpointed projects only
 ```

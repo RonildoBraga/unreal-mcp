@@ -1,40 +1,91 @@
-# Unreal MCP
+# Unreal MCP Server
 
-Python bridge for interacting with Unreal Engine 5.5 using the Model Context Protocol (MCP).
+Python FastMCP bridge for the UnrealMCP editor plugin.
+
+The MCP client launches this server over stdio. The server exposes Python
+tool wrappers, then forwards each Unreal-facing command to the editor plugin
+over local TCP at `127.0.0.1:55557` using:
+
+```json
+{"type": "<command_name>", "params": {...}}
+```
+
+The editor response shape is strict:
+
+```json
+{"success": true, "...payload": "..."}
+{"success": false, "error": "..."}
+```
 
 ## Setup
 
-1. Make sure Python 3.10+ is installed
-2. Install `uv` if you haven't already:
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-3. Create and activate a virtual environment:
-   ```bash
-   uv venv
-   source .venv/bin/activate  # On Unix/macOS
-   # or
-   .venv\Scripts\activate     # On Windows
-   ```
-4. Install dependencies:
-   ```bash
-   uv pip install -e .
-   ```
+Prerequisites: Python 3.12+, `uv`, Unreal Engine 5.7+, and a project with
+the UnrealMCP plugin loaded.
 
-At this point, you can configure your MCP Client (Claude Desktop, Cursor, Windsurf) to use the Unreal MCP Server as per the [Configuring your MCP Client](README.md#configuring-your-mcp-client).
+```bash
+cd server
+uv venv
+uv pip install -e .
+```
 
-## Testing Scripts
+Configure your MCP client to run:
 
-There are several scripts in the [scripts](./scripts) folder. They are useful for testing the tools and the Unreal Bridge via a direct connection. This means that you do not need to have an MCP Server running.
+```bash
+uv --directory /absolute/path/to/unreal-mcp/server run unreal_mcp_server.py
+```
 
-You should make sure you have installed dependencies and/or are running in the `uv` virtual environment in order for the scripts to work.
+See the top-level `README.md` and `examples/mcp-client-config.json` for
+client-specific config examples.
 
+## Validation
 
-## Troubleshooting
+`smoke_dispatch.py` is safe/read-only by default. It pings only an explicit
+allowlist of read-only wire commands with empty params and skips mutating,
+saving, viewport/UI, screenshot, PIE-control, and code-execution commands.
 
-- Make sure Unreal Engine editor is loaded loaded and running before running the server.
-- Check logs in `unreal_mcp.log` for detailed error information
+```bash
+cd server
+uv run python smoke_dispatch.py --list-only  # no socket traffic
+uv run python smoke_dispatch.py              # safe/read-only editor smoke
+```
+
+Full empty-param dispatch is available only as an explicit opt-in:
+
+```bash
+uv run python smoke_dispatch.py --allow-mutating
+```
+
+`--allow-mutating` can modify or save the currently open Unreal project. Use
+it only in a throwaway project or after taking an intentional checkpoint.
+
+The integration tests in `server/tests/test_object_property.py` require a
+live editor with the plugin listening on `127.0.0.1:55557`:
+
+```bash
+uv run pytest tests/test_object_property.py -q
+```
+
+Pure-Python tests, such as the smoke classifier tests, do not require the
+editor:
+
+```bash
+uv run pytest tests/test_smoke_dispatch.py -q
+```
 
 ## Development
 
-To add new tools, modify the `UnrealMCPBridge.py` file to add new command handlers, and update the `unreal_mcp_server.py` file to expose them through the HTTP API. 
+To add a normal Unreal-facing tool:
+
+1. Add a C++ handler in the matching file under
+   `plugin/Source/UnrealMCP/Private/Commands/`.
+2. Register the handler at the definition site with `REGISTER_MCP_COMMAND`.
+3. Add a Python wrapper in `server/tools/<category>_tools.py` using
+   `@unreal_tool(mcp)`.
+4. Write the tool docstring as the agent-facing catalog entry.
+5. Classify the new command in `smoke_dispatch.py` if it belongs in the
+   safe default smoke. Otherwise it remains skipped until deliberately
+   run with `--allow-mutating`.
+
+For wrappers that compose other commands or return FastMCP content blocks
+such as screenshots, use `@mcp.tool()` and call `dispatch_unreal_command`
+directly.

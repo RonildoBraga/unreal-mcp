@@ -52,6 +52,7 @@ public class UnrealMCP : ModuleRules
 				"LandscapeEditor",    // v0.9.x: FLandscapeEditDataInterface for sculpt_landscape_*
 				"Foliage",            // v0.9.x: LandscapeEdit.h transitively includes InstancedFoliageActor.h
 				"Niagara",            // v0.9.x: spawn/seek/set-param + list_niagara_user_params (FNiagaraUserRedirectionParameterStore)
+				"NiagaraEditor",      // v0.9.x: set_niagara_module_default — UNiagaraStackFunctionInput::SetLocalValue via headless FNiagaraSystemViewModel (this module is Type=Editor)
 				"Slate",
 				"SlateCore",
 				"UMG",

@@ -4,6 +4,43 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.9.1] — 2026-06-05 — Niagara baked-authoring: set_niagara_module_default
+
+LLM-*authored* VFX, not just LLM-*tuned*. `set_niagara_param` overrides a User
+Parameter on a live actor (runtime tuning); `set_niagara_module_default` edits a
+module input's **baked default on the asset itself** and recompiles — so the
+change bakes into every future spawn, and it works on ANY module input, exposed
+or not. This is the "edit the recipe" half of the pair: it lets an agent reshape
+an effect's fixed look — sprite size, gravity, velocity, drag, lifetime — from
+natural language, with no User Parameter and no editor.
+
+- **`set_niagara_module_default(system_path, input, value, module?, emitter?)`** —
+  drives the same view-model the Niagara editor UI sits on, headless, via
+  `UNiagaraStackFunctionInput::SetLocalValue` + recompile. Float-backed numeric
+  types (float / vec2 / vec3 / color). Self-correcting: a no/ambiguous match
+  returns the full `available_inputs` `[{emitter, module, input, type}]` list.
+
+Validated end-to-end on the Lauder campfire: re-authored the stock Fountain
+template into a rising-ember effect entirely over MCP (sprite size 6–12 → 1–2.5,
+gravity down → buoyant up, velocity / drag / lifetime / spawn-rate retuned).
+
+### Gotchas captured
+
+- **Headless view-model needs a message key.** `FNiagaraSystemViewModel::Initialize`
+  builds the emitter stack, whose EmitterProperties item subscribes to the
+  Niagara message manager and asserts (hard editor crash) on an empty asset key —
+  even with `bIsForDataProcessingOnly`. Fix: `Options.MessageLogGuid = FGuid::NewGuid()`.
+- **`module` filter matches the INTERNAL script name** (`InitializeParticle`,
+  `GravityForce`), not the display title ("Initialize Particle").
+- **Curves + adding modules are out of scope.** Data-interface-curve inputs (e.g.
+  `ScaleColor.Linear Color Curve`, for fade-over-life) and *adding* new modules
+  (e.g. a Curl Noise Force for turbulence) aren't reachable here — they'd need
+  dedicated `set_niagara_curve` / `add_niagara_module` tools.
+- **`NiagaraEditor`** added to `Build.cs` (editor-only) for the view-model API.
+- **Cold-cache calls can exceed the 5s MCP socket timeout** — the edit completes
+  server-side and the response lands in the editor log. A longer socket timeout
+  is a worthwhile follow-up.
+
 ## [0.9.0] — 2026-06-04 — Niagara VFX: LLM-driven particles
 
 Particle VFX become LLM-ownable end-to-end. Four new commands let an agent

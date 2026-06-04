@@ -146,3 +146,55 @@ def register_niagara_tools(mcp: FastMCP):
 
         Returns: {"success": true, "actor": "...", "live": bool}
         """
+
+    @unreal_tool(mcp)
+    def set_niagara_module_default(
+        ctx: Context,
+        system_path: str,
+        input: str,
+        value: Any,
+        module: str = "",
+        emitter: str = "",
+    ) -> Dict[str, Any]:
+        """Set a module input's BAKED default ON THE ASSET, then recompile — no
+        User Parameter required.
+
+        This is the "edit the recipe" counterpart to set_niagara_param's "season
+        one plate". set_niagara_param overrides a value on a live, already-spawned
+        actor and only works for inputs exposed as User Parameters. This instead
+        edits the NiagaraSystem asset itself (e.g. shrink "Uniform Sprite Size
+        Max" in "Initialize Particle"), so EVERY future spawn uses the new value —
+        and it works on ANY module input, exposed or not. Use it to author the
+        fixed look of an effect; use set_niagara_param/User Parameters only for
+        knobs you want to vary at runtime.
+
+        Drives the same editor view-model the Niagara UI sits on, headless.
+
+        Args:
+            system_path: /Game/- or /Niagara/- system path.
+            input:       module input name, e.g. "Uniform Sprite Size Max"
+                         (case-insensitive, must match exactly).
+            value:       a number, or array of numbers for vector/color types
+                         (float-backed numeric types only: float/vec2/vec3/color).
+            module:      optional case-insensitive substring filter on the
+                         owning module's INTERNAL script name — no spaces, e.g.
+                         "InitializeParticle", "GravityForce", "AddVelocity" —
+                         NOT the display title "Initialize Particle". Use it to
+                         disambiguate when an input name appears in >1 module.
+            emitter:     optional substring filter on the emitter name.
+
+        Self-correcting: if `input` matches nothing (or is ambiguous), the error
+        response includes "available_inputs" — the full
+        [{emitter, module, input, type}] list — so you can read the real module
+        names + inputs and retry. The asset is left dirty (not auto-saved);
+        persist with a save tool afterward.
+
+        Note: building the headless view-model can exceed the MCP socket timeout
+        on a COLD compile cache (the edit still completes server-side; the JSON
+        response — success or the available_inputs dump — lands in the editor
+        log). A warm cache returns normally.
+
+        Returns: {"success": true, "system": "...", "module": "...",
+                  "input": "...", "type": "...", "floats_written": N,
+                  "dirty": true}
+        """

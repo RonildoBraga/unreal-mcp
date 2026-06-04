@@ -35,6 +35,17 @@
 #include "NiagaraActor.h"
 #include "NiagaraUserRedirectionParameterStore.h"
 
+// Editor-only — baked module-input authoring (set_niagara_module_default).
+// Drives the same view-model the Niagara asset editor sits on, headless.
+#include "ViewModels/NiagaraSystemViewModel.h"
+#include "ViewModels/NiagaraEmitterHandleViewModel.h"
+#include "ViewModels/Stack/NiagaraStackViewModel.h"
+#include "ViewModels/Stack/NiagaraStackEntry.h"
+#include "ViewModels/Stack/NiagaraStackFunctionInput.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "NiagaraNodeFunctionCall.h"
+#include "UObject/StructOnScope.h"
+
 namespace
 {
 
@@ -274,6 +285,161 @@ TSharedPtr<FJsonObject> HandleSetNiagaraParam(const TSharedPtr<FJsonObject>& Par
     return FMCPResponse::Success(Result);
 }
 
+// ─── set_niagara_module_default (baked module-input authoring) ───────────────
+//
+// Edit a module input's baked default ON THE ASSET — not a per-instance
+// override — then recompile so every future spawn uses it. No User Parameter
+// required. This is the "edit the recipe" counterpart to set_niagara_param's
+// "season one plate". Drives the same view-model the Niagara editor UI sits on
+// (FNiagaraSystemViewModel + UNiagaraStackFunctionInput::SetLocalValue),
+// headless via bIsForDataProcessingOnly. On no/ambiguous match it returns the
+// full (emitter, module, input, type) list so a wrong guess self-corrects.
+// R&D: #80 follow-up — proves VFX *authoring* (not just tuning) is scriptable.
+
+TSharedPtr<FJsonObject> HandleSetNiagaraModuleDefault(const TSharedPtr<FJsonObject>& Params)
+{
+    FMCPParams P(Params);
+
+    FString SystemPath, InputName, Err;
+    if (!P.GetString(TEXT("system_path"), SystemPath, Err)) { return FMCPResponse::Error(Err); }
+    if (!P.GetString(TEXT("input"), InputName, Err))        { return FMCPResponse::Error(Err); }
+
+    const FString ModuleFilter  = P.GetStringOr(TEXT("module"));
+    const FString EmitterFilter = P.GetStringOr(TEXT("emitter"));
+
+    // value: accept a JSON array of numbers, or a single number.
+    TArray<float> Values;
+    if (!P.GetFloatArray(TEXT("value"), Values, Err))
+    {
+        float Single;
+        if (P.GetFloat(TEXT("value"), Single, Err)) { Values.Add(Single); }
+        else { return FMCPResponse::Error(TEXT("'value' must be a number or array of numbers")); }
+    }
+
+    UNiagaraSystem* System = LoadNiagaraSystem(SystemPath);
+    if (!System)
+    {
+        return FMCPResponse::Error(FString::Printf(TEXT("Could not load NiagaraSystem '%s'"), *SystemPath));
+    }
+
+    // Headless system view model — same object model the Niagara editor sits on.
+    // bIsForDataProcessingOnly skips undo registration / sequencer / preview.
+    FNiagaraSystemViewModelOptions Options;
+    Options.bIsForDataProcessingOnly = true;
+    Options.bCanSimulate = false;
+    Options.bCanAutoCompile = true;
+    Options.bCompileForEdit = true;
+    Options.bCanModifyEmittersFromTimeline = false;
+    // REQUIRED even headless: building the emitter stack creates an
+    // EmitterProperties UNiagaraStackObject that subscribes to the Niagara
+    // message manager, which asserts (crash) on an empty asset key. A fresh
+    // unique GUID is a harmless private subscription topic that satisfies it.
+    Options.MessageLogGuid.Emplace(FGuid::NewGuid());
+
+    TSharedRef<FNiagaraSystemViewModel> SystemVM = MakeShared<FNiagaraSystemViewModel>();
+    SystemVM->Initialize(*System, Options);
+
+    TArray<UNiagaraStackFunctionInput*> Matches;
+    TArray<TSharedPtr<FJsonValue>> Available;   // diagnostic dump for no/ambiguous match
+
+    for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterVM : SystemVM->GetEmitterHandleViewModels())
+    {
+        const FString EmitterName = EmitterVM->GetName().ToString();
+        if (!EmitterFilter.IsEmpty() && !EmitterName.Contains(EmitterFilter, ESearchCase::IgnoreCase))
+        {
+            continue;
+        }
+
+        UNiagaraStackViewModel* StackVM = EmitterVM->GetEmitterStackViewModel();
+        if (!StackVM || !StackVM->GetRootEntry()) { continue; }
+
+        TArray<UNiagaraStackFunctionInput*> Inputs;
+        StackVM->GetRootEntry()->GetUnfilteredChildrenOfType<UNiagaraStackFunctionInput>(Inputs, /*bRecursive*/ true);
+
+        for (UNiagaraStackFunctionInput* In : Inputs)
+        {
+            if (!In || In->IsStaticParameter()) { continue; }
+
+            const FString ModuleName = In->GetInputFunctionCallNode().GetFunctionName();
+            const FString InName     = In->GetInputParameterHandle().GetName().ToString();
+            const FString TypeName   = In->GetInputType().GetName();
+
+            TSharedPtr<FJsonObject> Rec = MakeShared<FJsonObject>();
+            Rec->SetStringField(TEXT("emitter"), EmitterName);
+            Rec->SetStringField(TEXT("module"), ModuleName);
+            Rec->SetStringField(TEXT("input"), InName);
+            Rec->SetStringField(TEXT("type"), TypeName);
+            Available.Add(MakeShared<FJsonValueObject>(Rec));
+
+            const bool bInputMatch  = InName.Equals(InputName, ESearchCase::IgnoreCase);
+            const bool bModuleMatch = ModuleFilter.IsEmpty() || ModuleName.Contains(ModuleFilter, ESearchCase::IgnoreCase);
+            if (bInputMatch && bModuleMatch) { Matches.Add(In); }
+        }
+    }
+
+    auto Fail = [&](const FString& Msg) -> TSharedPtr<FJsonObject>
+    {
+        TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+        R->SetBoolField(TEXT("success"), false);
+        R->SetStringField(TEXT("error"), Msg);
+        R->SetArrayField(TEXT("available_inputs"), Available);
+        return R;   // SystemVM tears down at scope exit (~FNiagaraSystemViewModel calls Cleanup)
+    };
+
+    if (Matches.Num() == 0)
+    {
+        return Fail(FString::Printf(
+            TEXT("No module input matched input='%s' module='%s' emitter='%s' — see available_inputs."),
+            *InputName, *ModuleFilter, *EmitterFilter));
+    }
+    if (Matches.Num() > 1)
+    {
+        return Fail(FString::Printf(
+            TEXT("Ambiguous: %d inputs matched input='%s' — narrow with 'module'/'emitter'. See available_inputs."),
+            Matches.Num(), *InputName));
+    }
+
+    UNiagaraStackFunctionInput* Target = Matches[0];
+    const FNiagaraTypeDefinition& Type = Target->GetInputType();
+    UScriptStruct* Struct = Cast<UScriptStruct>(Type.GetStruct());
+    if (!Struct)
+    {
+        return Fail(FString::Printf(
+            TEXT("Input '%s' (type '%s') is not a settable numeric struct"), *InputName, *Type.GetName()));
+    }
+
+    // Pack provided floats into the type's struct memory (float-backed numeric
+    // types: float / vec2 / vec3 / vec4 / color). Zero-fill the remainder.
+    const int32 TypeSize = Type.GetSize();
+    TSharedRef<FStructOnScope> ValueStruct = MakeShared<FStructOnScope>(Struct);
+    uint8* Mem = ValueStruct->GetStructMemory();
+    FMemory::Memzero(Mem, TypeSize);
+    const int32 NumFloats = FMath::Min(Values.Num(), TypeSize / (int32)sizeof(float));
+    for (int32 i = 0; i < NumFloats; ++i)
+    {
+        FMemory::Memcpy(Mem + i * sizeof(float), &Values[i], sizeof(float));
+    }
+
+    const FString RModule = Target->GetInputFunctionCallNode().GetFunctionName();
+    const FString RType   = Type.GetName();
+
+    Target->SetLocalValue(ValueStruct);          // writes RapidIterationParameters + requests recompile
+    System->WaitForCompilationComplete(false, false);
+    System->MarkPackageDirty();
+    // No explicit SystemVM->Cleanup(): that method isn't NIAGARAEDITOR_API-exported,
+    // and ~FNiagaraSystemViewModel() calls Cleanup() anyway when the TSharedRef
+    // drops at function scope exit.
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("system"), System->GetName());
+    Result->SetStringField(TEXT("module"), RModule);
+    Result->SetStringField(TEXT("input"), InputName);
+    Result->SetStringField(TEXT("type"), RType);
+    Result->SetNumberField(TEXT("floats_written"), NumFloats);
+    Result->SetBoolField(TEXT("dirty"), true);   // not auto-saved; persist via save tool
+    return FMCPResponse::Success(Result);
+}
+
 // ─── list_niagara_user_params (C++-only keystone) ───────────────────────────
 
 TSharedPtr<FJsonObject> HandleListNiagaraUserParams(const TSharedPtr<FJsonObject>& Params)
@@ -322,6 +488,7 @@ TSharedPtr<FJsonObject> HandleListNiagaraUserParams(const TSharedPtr<FJsonObject
 REGISTER_MCP_COMMAND("spawn_niagara", &HandleSpawnNiagara);
 REGISTER_MCP_COMMAND("seek_niagara", &HandleSeekNiagara);
 REGISTER_MCP_COMMAND("set_niagara_param", &HandleSetNiagaraParam);
+REGISTER_MCP_COMMAND("set_niagara_module_default", &HandleSetNiagaraModuleDefault);
 REGISTER_MCP_COMMAND("list_niagara_user_params", &HandleListNiagaraUserParams);
 
 } // namespace

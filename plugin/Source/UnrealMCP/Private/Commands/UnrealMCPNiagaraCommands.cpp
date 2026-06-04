@@ -5,10 +5,13 @@
 //
 // R&D (task #80) established the scriptable surface in UE 5.7:
 //   - spawn + set-param are reachable from the Niagara C++/Python API;
-//   - RENDERING a system at edit-time (so a screenshot shows it) requires the
-//     "seek" path: SetCanRenderWhileSeeking + AgeUpdateMode=DesiredAge +
-//     SeekToDesiredAge — a plain Activate/AdvanceSimulation does NOT render in
-//     a non-realtime editor viewport;
+//   - RENDERING a system at edit-time (so a screenshot shows it) requires
+//     forcing the component solo and explicitly advancing its simulation:
+//     SetForceSolo + SetCanRenderWhileSeeking + Activate + AdvanceSimulation.
+//     SeekToDesiredAge alone does NOT simulate in a non-PIE editor world — the
+//     world manager doesn't tick Niagara there, so the component reports
+//     active/visible but spawns zero particles (corrected in #80 follow-up,
+//     after the campfire-sparks bring-up surfaced empty preview screenshots);
 //   - enumerating a system's User Parameters is NOT exposed to Python at all
 //     (NiagaraSystem has no param-listing method there). It IS reachable in
 //     C++ via FNiagaraUserRedirectionParameterStore — which is the whole
@@ -174,15 +177,25 @@ TSharedPtr<FJsonObject> HandleSeekNiagara(const TSharedPtr<FJsonObject>& Params)
     const bool bLive = P.GetBoolOr(TEXT("live"), false);
     if (bLive)
     {
+        // Restore normal batched gameplay ticking. Clear ForceSolo in case a
+        // prior preview set it, else the system stays solo (works, but wasteful).
+        Comp->SetForceSolo(false);
         Comp->SetAgeUpdateMode(ENiagaraAgeUpdateMode::TickDeltaTime);
         Comp->Activate(true);
     }
     else
     {
+        // In a non-PIE editor world the world manager does not tick Niagara, so
+        // SeekToDesiredAge alone reports active/visible but spawns NOTHING.
+        // Forcing the component solo and explicitly advancing the sim is what
+        // actually simulates + renders it for a screenshot.
         const float Age = P.GetFloatOr(TEXT("age"), 1.0f);
+        Comp->SetForceSolo(true);
         Comp->SetCanRenderWhileSeeking(true);
-        Comp->SetAgeUpdateMode(ENiagaraAgeUpdateMode::DesiredAge);
-        Comp->SeekToDesiredAge(Age);
+        Comp->Activate(true);   // reset + activate
+        const float Dt = 1.0f / 30.0f;
+        const int32 Ticks = FMath::Max(1, FMath::CeilToInt(Age / Dt));
+        Comp->AdvanceSimulation(Ticks, Dt);
     }
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();

@@ -4,6 +4,40 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.9.0] — 2026-06-04 — Niagara VFX: LLM-driven particles
+
+Particle VFX become LLM-ownable end-to-end. Four new commands let an agent
+spawn a Niagara System, discover its tunable knobs, set them, and preview the
+result in a screenshot — with the editor reserved only for the one step that
+genuinely needs it: authoring/exposing a base system's **User Parameters**.
+
+- **`spawn_niagara`** — place a NiagaraSystem as a persistent NiagaraActor
+  (location / rotation / outliner label).
+- **`set_niagara_param`** — override one User Parameter by name
+  (float / int / bool / vec2 / vec3 / position / color).
+- **`list_niagara_user_params`** — enumerate a system's exposed User
+  Parameters. **C++-only on purpose:** UE 5.7's Python bindings expose no way
+  to list a system's parameters, so a blind `set_niagara_param` silently
+  no-ops. Reached via `FNiagaraUserRedirectionParameterStore` — the whole
+  reason this lives in C++ and not a Python wrapper.
+- **`seek_niagara`** — advance + render the sim at a chosen age so an editor
+  screenshot shows it; `live=true` restores normal gameplay ticking (call
+  before saving the level so the system isn't frozen in-game).
+
+### Gotchas captured
+
+- **Stock template systems expose zero User Parameters.** Recoloring
+  `FountainLightweight` et al. via `set_niagara_param` silently fails —
+  `list_niagara_user_params` returns `count: 0`. The base system must have its
+  knobs exposed in the Niagara editor first (the one unavoidable editor task);
+  from there spawn / tune / preview / iterate are all scriptable.
+- **`seek_niagara` preview: `SeekToDesiredAge` alone does NOT simulate** in a
+  non-PIE editor world — the world manager doesn't tick Niagara there, so the
+  component reports active/visible but spawns zero particles (empty
+  screenshots). Fixed to force the component solo and explicitly advance the
+  sim: `SetForceSolo + SetCanRenderWhileSeeking + Activate + AdvanceSimulation`.
+  Surfaced during the Lauder campfire-sparks bring-up.
+
 ## [0.8.0] — 2026-05-31 — architectural redesign + capability sprint
 
 The biggest release since the fork. Splits into two arcs:

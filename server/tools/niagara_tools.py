@@ -198,3 +198,45 @@ def register_niagara_tools(mcp: FastMCP):
                   "input": "...", "type": "...", "floats_written": N,
                   "dirty": true}
         """
+
+    @unreal_tool(mcp)
+    def add_niagara_module(
+        ctx: Context,
+        system_path: str,
+        module: str,
+        stage: str = "ParticleUpdate",
+        emitter: str = "",
+        before: str = "",
+    ) -> Dict[str, Any]:
+        """Add a whole MODULE to an emitter's stack, then recompile — the
+        complement to set_niagara_module_default (which only edits an existing
+        module's input). Use it to give an effect a capability it lacks, e.g.
+        add a "Curl Noise Force" to Particle Update so particles drift/zig-zag
+        on turbulent air currents.
+
+        Args:
+            system_path: /Game/- or /Niagara/- system path.
+            module:      the module script to add — either a "/Niagara/..."
+                         asset path (most reliable) or a bare name matched
+                         against module scripts valid for `stage` (e.g.
+                         "CurlNoiseForce"). The Curl Noise Force module is
+                         "/Niagara/Modules/Update/Forces/CurlNoiseForce".
+            stage:       which script stage to add into — ParticleSpawn,
+                         ParticleUpdate (default), EmitterSpawn, EmitterUpdate,
+                         SystemSpawn, SystemUpdate.
+            emitter:     optional substring filter on the emitter name
+                         (default: first emitter).
+            before:      optional internal module name to insert BEFORE (e.g.
+                         "SolveForcesAndVelocity"). ORDER MATTERS for forces — a
+                         force added AFTER SolveForcesAndVelocity won't affect
+                         that frame's motion. Default: append to the end.
+
+        Then tune the new module's inputs with set_niagara_module_default (e.g.
+        CurlNoiseForce's "Noise Strength" / "Noise Frequency"). Same cold-cache
+        socket-timeout caveat as set_niagara_module_default (completes
+        server-side; response in the editor log).
+
+        Returns: {"success": true, "system": "...", "emitter": "...",
+                  "module": "...", "added_node": "...", "stage": "...",
+                  "index": N, "dirty": true}
+        """

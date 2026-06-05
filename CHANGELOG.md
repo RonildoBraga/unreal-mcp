@@ -4,6 +4,32 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.9.2] — 2026-06-05 — Niagara: add_niagara_module
+
+Completes the authoring trio: the LLM can now *grow* an emitter's module stack,
+not just tune existing modules. `add_niagara_module` drops a whole module into a
+stage (e.g. a Curl Noise Force into Particle Update for turbulence), at a chosen
+position, then recompiles.
+
+- **`add_niagara_module(system_path, module, stage?, emitter?, before?)`** —
+  headless via the same `FNiagaraSystemViewModel`; the add itself is
+  `FNiagaraStackGraphUtilities::AddScriptModuleToStack` (the `UNiagaraScript*`
+  overload — the `FAssetData` / args-struct overloads aren't
+  `NIAGARAEDITOR_API`-exported). `module` is a `/Niagara/...` script path or a
+  bare name resolved against the stage's module-script registry. `before`
+  inserts ahead of a named module — order matters for forces (a Curl Noise
+  Force placed *after* `SolveForcesAndVelocity` won't affect that frame's
+  motion). The target stage, output node, and insert index all come from the
+  stack's `UNiagaraStackModuleItem` entries (`GetModuleNode` / `GetOutputNode` /
+  `GetOutputNodeUsage` — all exported).
+
+With `set_niagara_param` (runtime user-param override), `set_niagara_module_default`
+(baked input edit), and now `add_niagara_module` (stack growth), the editor's
+role in *authoring* a Niagara effect is essentially eliminated. Demonstrated by
+re-authoring the stock Fountain template into a bespoke campfire-ember effect
+end-to-end over MCP — including adding + tuning a Curl Noise Force so the sparks
+drift on the air currents.
+
 ## [0.9.1] — 2026-06-05 — Niagara baked-authoring: set_niagara_module_default
 
 LLM-*authored* VFX, not just LLM-*tuned*. `set_niagara_param` overrides a User

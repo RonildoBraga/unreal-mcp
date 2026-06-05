@@ -46,6 +46,14 @@
 #include "NiagaraNodeFunctionCall.h"
 #include "UObject/StructOnScope.h"
 
+// add_niagara_module: add a whole module to a stack (graph surgery).
+#include "ViewModels/Stack/NiagaraStackModuleItem.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "NiagaraNodeOutput.h"
+#include "NiagaraScript.h"
+#include "NiagaraEditorUtilities.h"
+#include "AssetRegistry/AssetData.h"
+
 namespace
 {
 
@@ -440,6 +448,169 @@ TSharedPtr<FJsonObject> HandleSetNiagaraModuleDefault(const TSharedPtr<FJsonObje
     return FMCPResponse::Success(Result);
 }
 
+// ─── add_niagara_module (stack module authoring) ─────────────────────────────
+//
+// ADD a whole module to an emitter's stack (e.g. a Curl Noise Force into the
+// Particle Update stage for turbulence), then recompile. The complement to
+// set_niagara_module_default (which edits an existing module's input). Same
+// headless FNiagaraSystemViewModel; the add is
+// FNiagaraStackGraphUtilities::AddScriptModuleToStack — the UNiagaraScript*
+// overload, since the FAssetData / args-struct overloads aren't
+// NIAGARAEDITOR_API-exported. `before` controls insert order, which matters for
+// forces: a Curl Noise Force must precede SolveForcesAndVelocity or its force
+// is integrated a frame late / not at all. R&D: #80 follow-up.
+
+ENiagaraScriptUsage ParseStageUsage(const FString& Stage, bool& bOk)
+{
+    bOk = true;
+    const FString S = Stage.Replace(TEXT(" "), TEXT("")).ToLower();
+    if (S.Contains(TEXT("particleupdate")) || S == TEXT("update")) return ENiagaraScriptUsage::ParticleUpdateScript;
+    if (S.Contains(TEXT("particlespawn")) || S == TEXT("spawn"))   return ENiagaraScriptUsage::ParticleSpawnScript;
+    if (S.Contains(TEXT("emitterupdate")))                         return ENiagaraScriptUsage::EmitterUpdateScript;
+    if (S.Contains(TEXT("emitterspawn")))                          return ENiagaraScriptUsage::EmitterSpawnScript;
+    if (S.Contains(TEXT("systemupdate")))                          return ENiagaraScriptUsage::SystemUpdateScript;
+    if (S.Contains(TEXT("systemspawn")))                           return ENiagaraScriptUsage::SystemSpawnScript;
+    bOk = false;
+    return ENiagaraScriptUsage::ParticleUpdateScript;
+}
+
+TSharedPtr<FJsonObject> HandleAddNiagaraModule(const TSharedPtr<FJsonObject>& Params)
+{
+    FMCPParams P(Params);
+
+    FString SystemPath, ModuleRef, Err;
+    if (!P.GetString(TEXT("system_path"), SystemPath, Err)) { return FMCPResponse::Error(Err); }
+    if (!P.GetString(TEXT("module"), ModuleRef, Err))       { return FMCPResponse::Error(Err); }
+
+    const FString StageStr      = P.GetStringOr(TEXT("stage"), TEXT("ParticleUpdate"));
+    const FString EmitterFilter = P.GetStringOr(TEXT("emitter"));
+    const FString BeforeModule  = P.GetStringOr(TEXT("before"));
+
+    bool bStageOk = false;
+    const ENiagaraScriptUsage Usage = ParseStageUsage(StageStr, bStageOk);
+    if (!bStageOk)
+    {
+        return FMCPResponse::Error(FString::Printf(
+            TEXT("Unknown stage '%s' (ParticleSpawn|ParticleUpdate|EmitterSpawn|EmitterUpdate|SystemSpawn|SystemUpdate)"),
+            *StageStr));
+    }
+
+    UNiagaraSystem* System = LoadNiagaraSystem(SystemPath);
+    if (!System)
+    {
+        return FMCPResponse::Error(FString::Printf(TEXT("Could not load NiagaraSystem '%s'"), *SystemPath));
+    }
+
+    // Resolve the module script: a "/"-path loads directly; a bare name is
+    // matched against the module-script asset registry for this stage.
+    UNiagaraScript* ModuleScript = nullptr;
+    if (ModuleRef.Contains(TEXT("/")))
+    {
+        ModuleScript = LoadObject<UNiagaraScript>(nullptr, *ToObjectPath(ModuleRef));
+    }
+    else
+    {
+        FNiagaraEditorUtilities::FGetFilteredScriptAssetsOptions Opt;
+        Opt.ScriptUsageToInclude = ENiagaraScriptUsage::Module;
+        Opt.TargetUsageToMatch   = Usage;
+        TArray<FAssetData> Assets;
+        FNiagaraEditorUtilities::GetFilteredScriptAssets(Opt, Assets);
+        for (const FAssetData& A : Assets)
+        {
+            if (A.AssetName.ToString().Contains(ModuleRef, ESearchCase::IgnoreCase))
+            {
+                ModuleScript = Cast<UNiagaraScript>(A.GetAsset());
+                if (ModuleScript) { break; }
+            }
+        }
+    }
+    if (!ModuleScript)
+    {
+        return FMCPResponse::Error(FString::Printf(TEXT("Could not resolve module script '%s'"), *ModuleRef));
+    }
+
+    // Headless view-model (MessageLogGuid required — see set_niagara_module_default).
+    FNiagaraSystemViewModelOptions Options;
+    Options.bIsForDataProcessingOnly = true;
+    Options.bCanSimulate = false;
+    Options.bCanAutoCompile = true;
+    Options.bCompileForEdit = true;
+    Options.bCanModifyEmittersFromTimeline = false;
+    Options.MessageLogGuid.Emplace(FGuid::NewGuid());
+
+    TSharedRef<FNiagaraSystemViewModel> SystemVM = MakeShared<FNiagaraSystemViewModel>();
+    SystemVM->Initialize(*System, Options);
+
+    // Collect the target stage's existing modules (execution order) + output node.
+    UNiagaraNodeOutput* TargetOutput = nullptr;
+    TArray<UNiagaraStackModuleItem*> StageModules;
+    FString ResolvedEmitter;
+
+    for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterVM : SystemVM->GetEmitterHandleViewModels())
+    {
+        const FString EName = EmitterVM->GetName().ToString();
+        if (!EmitterFilter.IsEmpty() && !EName.Contains(EmitterFilter, ESearchCase::IgnoreCase)) { continue; }
+
+        UNiagaraStackViewModel* StackVM = EmitterVM->GetEmitterStackViewModel();
+        if (!StackVM || !StackVM->GetRootEntry()) { continue; }
+
+        TArray<UNiagaraStackModuleItem*> Items;
+        StackVM->GetRootEntry()->GetUnfilteredChildrenOfType<UNiagaraStackModuleItem>(Items, /*bRecursive*/ true);
+        for (UNiagaraStackModuleItem* It : Items)
+        {
+            if (!It) { continue; }
+            if (FNiagaraStackGraphUtilities::GetOutputNodeUsage(It->GetModuleNode()) == Usage)
+            {
+                StageModules.Add(It);
+                if (!TargetOutput) { TargetOutput = It->GetOutputNode(); }
+            }
+        }
+        if (TargetOutput) { ResolvedEmitter = EName; break; }
+    }
+
+    if (!TargetOutput)
+    {
+        return FMCPResponse::Error(FString::Printf(
+            TEXT("No '%s' stage found on emitter '%s'"), *StageStr, *EmitterFilter));
+    }
+
+    // Insert index: before the named module if given, else append (INDEX_NONE).
+    int32 TargetIndex = INDEX_NONE;
+    if (!BeforeModule.IsEmpty())
+    {
+        for (int32 i = 0; i < StageModules.Num(); ++i)
+        {
+            if (StageModules[i]->GetModuleNode().GetFunctionName().Contains(BeforeModule, ESearchCase::IgnoreCase))
+            {
+                TargetIndex = i;
+                break;
+            }
+        }
+    }
+
+    UNiagaraNodeFunctionCall* NewNode =
+        FNiagaraStackGraphUtilities::AddScriptModuleToStack(ModuleScript, *TargetOutput, TargetIndex);
+    if (!NewNode)
+    {
+        return FMCPResponse::Error(TEXT("AddScriptModuleToStack returned null — module not added"));
+    }
+    const FString AddedName = NewNode->GetFunctionName();
+
+    System->RequestCompile(true);
+    System->WaitForCompilationComplete(false, false);
+    System->MarkPackageDirty();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("system"), System->GetName());
+    Result->SetStringField(TEXT("emitter"), ResolvedEmitter);
+    Result->SetStringField(TEXT("module"), ModuleScript->GetName());
+    Result->SetStringField(TEXT("added_node"), AddedName);
+    Result->SetStringField(TEXT("stage"), StageStr);
+    Result->SetNumberField(TEXT("index"), TargetIndex);
+    Result->SetBoolField(TEXT("dirty"), true);
+    return FMCPResponse::Success(Result);
+}
+
 // ─── list_niagara_user_params (C++-only keystone) ───────────────────────────
 
 TSharedPtr<FJsonObject> HandleListNiagaraUserParams(const TSharedPtr<FJsonObject>& Params)
@@ -489,6 +660,7 @@ REGISTER_MCP_COMMAND("spawn_niagara", &HandleSpawnNiagara);
 REGISTER_MCP_COMMAND("seek_niagara", &HandleSeekNiagara);
 REGISTER_MCP_COMMAND("set_niagara_param", &HandleSetNiagaraParam);
 REGISTER_MCP_COMMAND("set_niagara_module_default", &HandleSetNiagaraModuleDefault);
+REGISTER_MCP_COMMAND("add_niagara_module", &HandleAddNiagaraModule);
 REGISTER_MCP_COMMAND("list_niagara_user_params", &HandleListNiagaraUserParams);
 
 } // namespace

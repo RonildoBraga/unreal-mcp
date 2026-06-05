@@ -240,3 +240,39 @@ def register_niagara_tools(mcp: FastMCP):
                   "module": "...", "added_node": "...", "stage": "...",
                   "index": N, "dirty": true}
         """
+
+    @unreal_tool(mcp)
+    def set_niagara_renderer_material(
+        ctx: Context,
+        system_path: str,
+        material: str,
+        emitter: str = "",
+        sub_image_size: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Set the MATERIAL on an emitter's Sprite Renderer — the third Niagara
+        authoring leg, after set_niagara_module_default (module inputs) and
+        add_niagara_module (stack growth). A renderer isn't a module, so its
+        material can't be reached by those tools; this sets it directly on the
+        sprite renderer properties.
+
+        The reason it exists: spark/flame sprites are additive (they glow), but
+        smoke must be translucent (it occludes). Swapping in a translucent smoke
+        material is exactly what turns a glowing-particle system into smoke.
+
+        Args:
+            system_path:    /Game/- or /Niagara/- system path.
+            material:       material asset path, e.g.
+                            "/Engine/Tutorial/SubEditors/TutorialAssets/M_smoke_subUV_blackbody".
+            emitter:        optional substring filter on the emitter name
+                            (default: first emitter with a sprite renderer).
+            sub_image_size: optional [cols, rows] SubUV grid for flipbook
+                            sheets — e.g. [8, 8] for an 8x8 smoke sheet. Pair
+                            with a "SubUVAnimation" module + a SubImageIndex so
+                            the flipbook plays. Omit to leave unchanged.
+
+        Same cold-cache socket-timeout caveat as the other authoring tools
+        (completes server-side; response in the editor log).
+
+        Returns: {"success": true, "system": "...", "emitter": "...",
+                  "material": "...", "sub_image_size"?: "8x8", "dirty": true}
+        """

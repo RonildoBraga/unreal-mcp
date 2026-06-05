@@ -54,6 +54,11 @@
 #include "NiagaraEditorUtilities.h"
 #include "AssetRegistry/AssetData.h"
 
+// set_niagara_renderer_material: sprite renderer material + SubUV grid.
+#include "ViewModels/Stack/NiagaraStackRendererItem.h"
+#include "NiagaraSpriteRendererProperties.h"
+#include "Materials/MaterialInterface.h"
+
 namespace
 {
 
@@ -611,6 +616,107 @@ TSharedPtr<FJsonObject> HandleAddNiagaraModule(const TSharedPtr<FJsonObject>& Pa
     return FMCPResponse::Success(Result);
 }
 
+// ─── set_niagara_renderer_material (sprite renderer authoring) ────────────────
+//
+// Set the MATERIAL on an emitter's Sprite Renderer (e.g. a translucent smoke
+// material), optionally with a SubUV grid size for flipbook textures, then
+// recompile. The third leg of Niagara authoring after set_niagara_module_default
+// (module inputs) and add_niagara_module (stack growth): a renderer is not a
+// module, so its material lives on UNiagaraSpriteRendererProperties, reached via
+// the stack's UNiagaraStackRendererItem::GetRendererProperties(). R&D: #80.
+
+TSharedPtr<FJsonObject> HandleSetNiagaraRendererMaterial(const TSharedPtr<FJsonObject>& Params)
+{
+    FMCPParams P(Params);
+
+    FString SystemPath, MaterialPath, Err;
+    if (!P.GetString(TEXT("system_path"), SystemPath, Err)) { return FMCPResponse::Error(Err); }
+    if (!P.GetString(TEXT("material"), MaterialPath, Err))  { return FMCPResponse::Error(Err); }
+
+    const FString EmitterFilter = P.GetStringOr(TEXT("emitter"));
+
+    UNiagaraSystem* System = LoadNiagaraSystem(SystemPath);
+    if (!System)
+    {
+        return FMCPResponse::Error(FString::Printf(TEXT("Could not load NiagaraSystem '%s'"), *SystemPath));
+    }
+
+    UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(MaterialPath));
+    if (!Material)
+    {
+        return FMCPResponse::Error(FString::Printf(TEXT("Could not load material '%s'"), *MaterialPath));
+    }
+
+    // optional SubUV grid size [cols, rows] for flipbook sprite sheets.
+    TArray<float> SubImg;
+    const bool bHasSubImg = P.GetFloatArray(TEXT("sub_image_size"), SubImg, Err) && SubImg.Num() >= 2;
+
+    FNiagaraSystemViewModelOptions Options;
+    Options.bIsForDataProcessingOnly = true;
+    Options.bCanSimulate = false;
+    Options.bCanAutoCompile = true;
+    Options.bCompileForEdit = true;
+    Options.bCanModifyEmittersFromTimeline = false;
+    Options.MessageLogGuid.Emplace(FGuid::NewGuid());
+
+    TSharedRef<FNiagaraSystemViewModel> SystemVM = MakeShared<FNiagaraSystemViewModel>();
+    SystemVM->Initialize(*System, Options);
+
+    UNiagaraSpriteRendererProperties* TargetProps = nullptr;
+    FString ResolvedEmitter;
+
+    for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterVM : SystemVM->GetEmitterHandleViewModels())
+    {
+        const FString EName = EmitterVM->GetName().ToString();
+        if (!EmitterFilter.IsEmpty() && !EName.Contains(EmitterFilter, ESearchCase::IgnoreCase)) { continue; }
+
+        UNiagaraStackViewModel* StackVM = EmitterVM->GetEmitterStackViewModel();
+        if (!StackVM || !StackVM->GetRootEntry()) { continue; }
+
+        TArray<UNiagaraStackRendererItem*> Items;
+        StackVM->GetRootEntry()->GetUnfilteredChildrenOfType<UNiagaraStackRendererItem>(Items, /*bRecursive*/ true);
+        for (UNiagaraStackRendererItem* It : Items)
+        {
+            if (!It) { continue; }
+            if (UNiagaraSpriteRendererProperties* Sprite = Cast<UNiagaraSpriteRendererProperties>(It->GetRendererProperties()))
+            {
+                TargetProps = Sprite;
+                break;
+            }
+        }
+        if (TargetProps) { ResolvedEmitter = EName; break; }
+    }
+
+    if (!TargetProps)
+    {
+        return FMCPResponse::Error(FString::Printf(
+            TEXT("No sprite renderer found on emitter '%s'"), *EmitterFilter));
+    }
+
+    TargetProps->Modify();
+    TargetProps->Material = Material;
+    if (bHasSubImg)
+    {
+        TargetProps->SubImageSize = FVector2D(SubImg[0], SubImg[1]);
+    }
+    TargetProps->PostEditChange();
+
+    System->RequestCompile(true);
+    System->WaitForCompilationComplete(false, false);
+    System->MarkPackageDirty();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("system"), System->GetName());
+    Result->SetStringField(TEXT("emitter"), ResolvedEmitter);
+    Result->SetStringField(TEXT("material"), Material->GetName());
+    if (bHasSubImg)
+    {
+        Result->SetStringField(TEXT("sub_image_size"), FString::Printf(TEXT("%gx%g"), SubImg[0], SubImg[1]));
+    }
+    Result->SetBoolField(TEXT("dirty"), true);
+    return FMCPResponse::Success(Result);
+}
+
 // ─── list_niagara_user_params (C++-only keystone) ───────────────────────────
 
 TSharedPtr<FJsonObject> HandleListNiagaraUserParams(const TSharedPtr<FJsonObject>& Params)
@@ -661,6 +767,7 @@ REGISTER_MCP_COMMAND("seek_niagara", &HandleSeekNiagara);
 REGISTER_MCP_COMMAND("set_niagara_param", &HandleSetNiagaraParam);
 REGISTER_MCP_COMMAND("set_niagara_module_default", &HandleSetNiagaraModuleDefault);
 REGISTER_MCP_COMMAND("add_niagara_module", &HandleAddNiagaraModule);
+REGISTER_MCP_COMMAND("set_niagara_renderer_material", &HandleSetNiagaraRendererMaterial);
 REGISTER_MCP_COMMAND("list_niagara_user_params", &HandleListNiagaraUserParams);
 
 } // namespace

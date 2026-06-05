@@ -4,6 +4,39 @@ All notable changes to this fork of `chongdashu/unreal-mcp` are tracked here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), and the project follows informal semantic versioning until it stabilizes out of experimental status.
 
+## [0.9.3] — 2026-06-05 — Niagara: set_niagara_renderer_material
+
+The fourth and final authoring leg: set the **material on a sprite renderer**.
+Module-input edits and stack growth can't reach a renderer's material (it isn't
+a module), so this sets it directly on `UNiagaraSpriteRendererProperties`,
+reached via `UNiagaraStackRendererItem::GetRendererProperties()`. Why it matters:
+spark/flame sprites are *additive* (they glow); smoke must be *translucent* (it
+occludes) — swapping in a translucent material is what turns a glowing-particle
+system into smoke.
+
+- **`set_niagara_renderer_material(system_path, material, emitter?, sub_image_size?)`** —
+  headless via the shared `FNiagaraSystemViewModel`; sets `Material` (and
+  optional `SubImageSize` for flipbook sheets, e.g. `[8,8]`) on the first sprite
+  renderer, then recompiles.
+
+With this, the Niagara authoring suite is complete — `set_niagara_param`
+(runtime), `set_niagara_module_default` (baked inputs), `add_niagara_module`
+(stack growth), `set_niagara_renderer_material` (renderer). Demonstrated by
+authoring a from-scratch campfire **smoke** plume entirely over MCP: duplicate a
+Fountain → swap in `M_smoke_subUV_blackbody` → re-author into a slow, light-grey
+plume rising off the embers.
+
+### Gotcha captured
+
+- **FountainLightweight has no enumerable module inputs** — duplicating it gave
+  `available_inputs: []` (it uses an inherited/lightweight emitter the stack
+  view-model doesn't expose function inputs for). Use a full Fountain (or an
+  existing authored system) as the base for `set_niagara_module_default` work.
+- **Cold-cache + parallel calls collide**: a fresh-duplicated system's first
+  view-model build is slow; firing several edits at once makes the later sockets
+  time out (the edits still apply server-side). Send the first edit alone to warm
+  it, or expect timeouts and verify via the editor log.
+
 ## [0.9.2] — 2026-06-05 — Niagara: add_niagara_module
 
 Completes the authoring trio: the LLM can now *grow* an emitter's module stack,
